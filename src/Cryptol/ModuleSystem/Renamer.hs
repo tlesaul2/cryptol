@@ -377,7 +377,7 @@ instance Rename Expr where
     ESel e' s     -> ESel    <$> rename e' <*> pure s
     EList es      -> EList   <$> rename es
     EFromTo s n e'-> EFromTo <$> rename s  <*> rename n  <*> rename e'
-    EInfFrom e e' -> EInfFrom<$> rename e  <*> rename e'
+    EInfFrom a b  -> EInfFrom<$> rename a  <*> rename b
     EComp e' bs   -> do bs' <- mapM renameMatch bs
                         shadowNames (namingEnv bs')
                             (EComp <$> rename e' <*> pure bs')
