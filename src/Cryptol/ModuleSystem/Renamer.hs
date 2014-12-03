@@ -40,8 +40,13 @@ import qualified Data.Map as Map
 data RenamerError
   = MultipleSyms (Located QName) [NameOrigin]
     -- ^ Multiple imported symbols contain this name
-  | UnboundSym (Located QName)
-    -- ^ Symbol is not bound to any definition
+
+  | UnboundExpr (Located QName)
+    -- ^ Expression name is not bound to any definition
+
+  | UnboundType (Located QName)
+    -- ^ Type name is not bound to any definition
+
   | OverlappingSyms [NameOrigin]
     -- ^ An environment has produced multiple overlapping symbols
 
@@ -56,8 +61,11 @@ instance PP RenamerError where
       hang (text "[error] Multiple definitions for symbol:" <+> pp lqn)
          4 (vcat (map pp qns))
 
-    UnboundSym lqn ->
-      text "[error] unbound symbol:" <+> pp lqn
+    UnboundExpr lqn ->
+      text "[error] unbound identifier:" <+> pp lqn
+
+    UnboundType lqn ->
+      text "[error] unbound type:" <+> pp lqn
 
     -- XXX these really need to be located
     OverlappingSyms qns ->
@@ -258,7 +266,7 @@ renameExpr qn = do
          return qn
     Nothing   ->
       do n <- located qn
-         record (UnboundSym n)
+         record (UnboundExpr n)
          return qn
 
 renameType :: QName -> RenameM QName
@@ -273,7 +281,7 @@ renameType qn = do
          return qn
     Nothing   ->
       do n <- located qn
-         record (UnboundSym n)
+         record (UnboundType n)
          return qn
 
 -- | Rename a schema, assuming that none of its type variables are already in
