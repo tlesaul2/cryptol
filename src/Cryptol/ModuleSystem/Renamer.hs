@@ -49,9 +49,6 @@ data RenamerError
   | OverlappingSyms [NameOrigin]
     -- ^ An environment has produced multiple overlapping symbols
 
-  | BuiltInTypeDecl QName
-    -- ^ This is a built-in type name, and user may not shadow it.
-
   | ExpectedValue (Located QName)
     -- ^ When a value is expected from the naming environment, but one or more
     -- types exist instead.
@@ -183,37 +180,35 @@ shadowNames names m = RenameM $ do
   let ro' = ro { roNames = env `shadowing` roNames ro }
   local ro' (unRenameM m)
 
--- | Generate warnings when the the left environment shadows things defined in
+-- | Generate warnings when the left environment shadows things defined in
 -- the right.  Additionally, generate errors when two names overlap in the
 -- left environment.
 checkEnv :: NamingEnv -> NamingEnv -> Out
-checkEnv l r = Map.foldlWithKey (step False neExprs) mempty (neExprs l)
-     `mappend` Map.foldlWithKey (step True neTypes) mempty (neTypes l)
+checkEnv l r = Map.foldlWithKey (step neExprs) mempty (neExprs l)
+     `mappend` Map.foldlWithKey (step neTypes) mempty (neTypes l)
   where
 
-  step isType prj acc k ns = acc `mappend` Out
+  step prj acc k ns = acc `mappend` mempty
     { oWarnings = case Map.lookup k (prj r) of
         Nothing -> []
         Just os -> [SymbolShadowed (map origin os) (map origin ns)]
     , oErrors   = containsOverlap ns
-    } `mappend`
-      checkValidDecl isType k
+    }
 
-  containsOverlap ns = case ns of
-    [_] -> []
-    []  -> panic "Renamer" ["Invalid naming environment"]
-    _   -> [OverlappingSyms (map origin ns)]
-
-  checkValidDecl True nm@(QName _ (Name "width")) =
-    mempty { oErrors = [BuiltInTypeDecl nm] }
-  checkValidDecl _ _ = mempty
-
+-- | Check the RHS of a single name rewrite for conflicting sources.
+containsOverlap :: HasQName a => [a] -> [RenamerError]
+containsOverlap [_] = []
+containsOverlap []  = panic "Renamer" ["Invalid naming environment"]
+containsOverlap ns  = [OverlappingSyms (map origin ns)]
 
 -- | Throw errors for any names that overlap in a rewrite environment.
 checkNamingEnv :: NamingEnv -> ([RenamerError],[RenamerWarning])
-checkNamingEnv env = (oErrors out, oWarnings out)
+checkNamingEnv env = (out, [])
   where
-  out = checkEnv env mempty
+  out    = Map.foldr check outTys (neExprs env)
+  outTys = Map.foldr check mempty (neTypes env)
+
+  check ns acc = containsOverlap ns ++ acc
 
 
 -- Renaming --------------------------------------------------------------------
