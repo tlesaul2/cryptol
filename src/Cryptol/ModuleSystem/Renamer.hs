@@ -62,22 +62,22 @@ instance PP RenamerError where
   ppPrec _ e = case e of
 
     MultipleSyms lqn qns ->
-      hang (text "[error] Multiple definitions for symbol:" <+> pp lqn)
-         4 (vcat (map pp qns))
+      hang (text "[error]" <+> pp (srcRange lqn))
+         4 $ (text "Multiple definitions for symbol:" <+> pp (thing lqn))
+          $$ vcat (map pp qns)
 
     UnboundExpr lqn ->
-      text "[error] Identifier not in scope:" <+> pp lqn
+      hang (text "[error]" <+> pp (srcRange lqn))
+         4 (text "Value not in scope:" <+> pp (thing lqn))
 
     UnboundType lqn ->
-      text "[error] Type not in scope:" <+> pp lqn
+      hang (text "[error]" <+> pp (srcRange lqn))
+         4 (text "Type not in scope:" <+> pp (thing lqn))
 
     OverlappingSyms qns ->
-      hang (text "[error] Overlapping symbols defined:")
-         4 (vcat (map pp qns))
-
-    BuiltInTypeDecl q ->
-      hang (text "[error] Built-in type name may not be shadowed:")
-         4 (pp q)
+      hang (text "[error]")
+         4 $ text "Overlapping symbols defined:"
+          $$ vcat (map pp qns)
 
     ExpectedValue lqn ->
       hang (text "[error]" <+> pp (srcRange lqn))
