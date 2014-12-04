@@ -93,14 +93,23 @@ instance PP RenamerError where
 -- Warnings --------------------------------------------------------------------
 
 data RenamerWarning
-  = SymbolShadowed [NameOrigin] [NameOrigin]
+  = SymbolShadowed NameOrigin [NameOrigin]
     deriving (Show)
 
 instance PP RenamerWarning where
-  ppPrec _ (SymbolShadowed original new) =
-    hang (text "[warning] This binding for" <+> commaSep (map pp original)
-              <+> text "shadows the existing binding")
-       4 (vcat (map pp new))
+  ppPrec _ (SymbolShadowed new originals) =
+    hang (text "[warning]" <+> loc)
+       4 $ fsep [ text "This binding for" <+> sym
+                , text "shadows the existing binding" <> plural <+> text "from" ]
+        $$ vcat (map pp originals)
+
+    where
+    plural | length originals > 1 = char 's'
+           | otherwise            = empty
+
+    (loc,sym) = case new of
+                  Local lqn   -> (pp (srcRange lqn), pp (thing lqn))
+                  Imported qn -> (empty, pp qn)
 
 
 -- Renaming Monad --------------------------------------------------------------
@@ -191,7 +200,7 @@ checkEnv l r = Map.foldlWithKey (step neExprs) mempty (neExprs l)
   step prj acc k ns = acc `mappend` mempty
     { oWarnings = case Map.lookup k (prj r) of
         Nothing -> []
-        Just os -> [SymbolShadowed (map origin os) (map origin ns)]
+        Just os -> [SymbolShadowed (origin (head ns)) (map origin os)]
     , oErrors   = containsOverlap ns
     }
 
