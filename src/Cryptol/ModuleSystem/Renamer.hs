@@ -36,7 +36,6 @@ import qualified Data.Map as Map
 
 -- Errors ----------------------------------------------------------------------
 
--- XXX make these located
 data RenamerError
   = MultipleSyms (Located QName) [NameOrigin]
     -- ^ Multiple imported symbols contain this name
@@ -67,7 +66,6 @@ instance PP RenamerError where
     UnboundType lqn ->
       text "[error] unbound type:" <+> pp lqn
 
-    -- XXX these really need to be located
     OverlappingSyms qns ->
       hang (text "[error] Overlapping symbols defined:")
          4 (vcat (map pp qns))
