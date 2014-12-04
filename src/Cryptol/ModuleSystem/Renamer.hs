@@ -62,16 +62,16 @@ instance PP RenamerError where
   ppPrec _ e = case e of
 
     MultipleSyms lqn qns ->
-      hang (text "[error]" <+> pp (srcRange lqn))
+      hang (text "[error] at" <+> pp (srcRange lqn))
          4 $ (text "Multiple definitions for symbol:" <+> pp (thing lqn))
           $$ vcat (map pp qns)
 
     UnboundExpr lqn ->
-      hang (text "[error]" <+> pp (srcRange lqn))
+      hang (text "[error] at" <+> pp (srcRange lqn))
          4 (text "Value not in scope:" <+> pp (thing lqn))
 
     UnboundType lqn ->
-      hang (text "[error]" <+> pp (srcRange lqn))
+      hang (text "[error] at" <+> pp (srcRange lqn))
          4 (text "Type not in scope:" <+> pp (thing lqn))
 
     OverlappingSyms qns ->
@@ -80,13 +80,13 @@ instance PP RenamerError where
           $$ vcat (map pp qns)
 
     ExpectedValue lqn ->
-      hang (text "[error]" <+> pp (srcRange lqn))
+      hang (text "[error] at" <+> pp (srcRange lqn))
          4 (fsep [ text "Expected a value named", quotes (pp (thing lqn))
                  , text "but found a type instead"
                  , text "Did you mean `(" <> pp (thing lqn) <> text")?" ])
 
     ExpectedType lqn ->
-      hang (text "[error]" <+> pp (srcRange lqn))
+      hang (text "[error] at" <+> pp (srcRange lqn))
          4 (fsep [ text "Expected a type named", quotes (pp (thing lqn))
                  , text "but found a value instead" ])
 
@@ -98,7 +98,7 @@ data RenamerWarning
 
 instance PP RenamerWarning where
   ppPrec _ (SymbolShadowed new originals) =
-    hang (text "[warning]" <+> loc)
+    hang (text "[warning] at" <+> loc)
        4 $ fsep [ text "This binding for" <+> sym
                 , text "shadows the existing binding" <> plural <+> text "from" ]
         $$ vcat (map pp originals)
