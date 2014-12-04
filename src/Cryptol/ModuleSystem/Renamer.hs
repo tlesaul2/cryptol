@@ -51,6 +51,14 @@ data RenamerError
 
   | BuiltInTypeDecl QName
     -- ^ This is a built-in type name, and user may not shadow it.
+
+  | ExpectedValue (Located QName)
+    -- ^ When a value is expected from the naming environment, but one or more
+    -- types exist instead.
+
+  | ExpectedType (Located QName)
+    -- ^ When a type is missing from the naming environment, but one or more
+    -- values exist with the same name.
     deriving (Show)
 
 instance PP RenamerError where
@@ -61,10 +69,10 @@ instance PP RenamerError where
          4 (vcat (map pp qns))
 
     UnboundExpr lqn ->
-      text "[error] unbound identifier:" <+> pp lqn
+      text "[error] Identifier not in scope:" <+> pp lqn
 
     UnboundType lqn ->
-      text "[error] unbound type:" <+> pp lqn
+      text "[error] Type not in scope:" <+> pp lqn
 
     OverlappingSyms qns ->
       hang (text "[error] Overlapping symbols defined:")
@@ -73,6 +81,17 @@ instance PP RenamerError where
     BuiltInTypeDecl q ->
       hang (text "[error] Built-in type name may not be shadowed:")
          4 (pp q)
+
+    ExpectedValue lqn ->
+      hang (text "[error]" <+> pp (srcRange lqn))
+         4 (fsep [ text "Expected a value named", quotes (pp (thing lqn))
+                 , text "but found a type instead"
+                 , text "Did you mean `(" <> pp (thing lqn) <> text")?" ])
+
+    ExpectedType lqn ->
+      hang (text "[error]" <+> pp (srcRange lqn))
+         4 (fsep [ text "Expected a type named", quotes (pp (thing lqn))
+                 , text "but found a value instead" ])
 
 -- Warnings --------------------------------------------------------------------
 
@@ -264,7 +283,13 @@ renameExpr qn = do
          return qn
     Nothing   ->
       do n <- located qn
-         record (UnboundExpr n)
+
+         case Map.lookup qn (neTypes (roNames ro)) of
+           -- types existed with the name of the value expected
+           Just _ -> record (ExpectedValue n)
+
+           -- the value is just missing
+           Nothing -> record (UnboundExpr n)
          return qn
 
 renameType :: QName -> RenameM QName
@@ -279,7 +304,15 @@ renameType qn = do
          return qn
     Nothing   ->
       do n <- located qn
-         record (UnboundType n)
+
+         case Map.lookup qn (neExprs (roNames ro)) of
+
+           -- values exist with the same name, so throw a different error
+           Just _ -> record (ExpectedType n)
+
+           -- no terms with the same name, so the type is just unbound
+           Nothing -> record (UnboundType n)
+
          return qn
 
 -- | Rename a schema, assuming that none of its type variables are already in
