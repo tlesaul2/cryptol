@@ -21,6 +21,8 @@ import Paths_cryptol (version)
 import Cryptol.Version (commitHash, commitBranch, commitDirty)
 import Data.Version (showVersion)
 import Cryptol.Utils.PP(pp)
+import Data.Char (isAlpha, toLower)
+import Data.List (intercalate)
 import Data.Monoid (mconcat)
 import System.Environment (getArgs,getProgName)
 import System.Exit (exitFailure)
@@ -33,7 +35,20 @@ data Options = Options
   , optHelp       :: Bool
   , optBatch      :: Maybe FilePath
   , optDotCryptol :: DotCryptol
+  , optDirectory      :: Maybe FilePath
+  , optGenerationRoot :: Maybe GenerationRoot
+  , optTarget  :: GenerationTarget
   } deriving (Show)
+
+data GenerationRoot
+  = Identifier String
+  | Module     String
+  | File       FilePath
+  | Directory  FilePath
+  deriving (Eq, Ord, Read, Show)
+
+data GenerationTarget = SBVC | SV | BSV | Verilog
+  deriving (Bounded, Enum, Eq, Ord, Read, Show)
 
 defaultOptions :: Options
 defaultOptions  = Options
@@ -42,6 +57,9 @@ defaultOptions  = Options
   , optHelp       = False
   , optBatch      = Nothing
   , optDotCryptol = DotCDefault
+  , optDirectory      = Nothing
+  , optGenerationRoot = Nothing
+  , optTarget         = SBVC
   }
 
 options :: [OptDescr (OptParser Options)]
@@ -60,6 +78,15 @@ options  =
 
   , Option ""  ["cryptol-script"] (ReqArg addDotC "FILE")
     "read additional .cryptol files"
+
+  , Option "o" ["output-dir"] (ReqArg setDirectory "DIR")
+    "output directory for code generation (default stdout)"
+
+  , Option ""  ["root"] (ReqArg setGenerationRoot "UNIT")
+    "generate code for the specified identifier, module, file, or directory"
+
+  , Option "t" ["target"] (ReqArg setTarget "BACKEND")
+    "code generation backend (default SBV-C)"
   ]
 
 -- | Set a single file to be loaded.  This should be extended in the future, if
@@ -92,6 +119,26 @@ addDotC path = modify $ \ opts ->
     DotCDisabled -> opts
     DotCFiles xs -> opts { optDotCryptol = DotCFiles (path:xs) }
 
+-- | Choose an output directory.
+setDirectory :: FilePath -> OptParser Options
+setDirectory path = modify $ \opts -> opts { optDirectory = Just path }
+
+-- | Choose a unit for code generation. Heuristic: it's always an identifier.
+-- This also signals that code generation should be performed instead of
+-- dropping into the REPL.
+-- XXX Use a better heuristic.
+setGenerationRoot :: String -> OptParser Options
+setGenerationRoot id = modify $ \opts -> opts { optGenerationRoot = Just (Identifier id) }
+
+-- | Choose a code generation target.
+setTarget target = case (flip lookup targetMapping . filter isAlpha . map toLower) target of
+  Just t  -> modify $ \opts -> opts { optTarget = t }
+  Nothing -> report $ "Unknown backend " ++ target ++
+                      ". Choices are " ++ knownTargets
+  where
+  targetMapping = [("sbvc", SBVC), ("sv", SV), ("bsv", BSV), ("verilog", Verilog)]
+  knownTargets = intercalate ", " (map fst targetMapping)
+
 -- | Parse arguments.
 parseArgs :: [String] -> Either [String] Options
 parseArgs args = case getOpt (ReturnInOrder addFile) options args of
@@ -112,7 +159,7 @@ displayHelp :: [String] -> IO ()
 displayHelp errs = do
   prog <- getProgName
   let banner = "Usage: " ++ prog ++ " [OPTIONS]"
-  putStrLn (usageInfo (concat (errs ++ [banner])) options)
+  putStrLn (usageInfo (unlines errs ++ banner) options)
 
 main :: IO ()
 main  = do
