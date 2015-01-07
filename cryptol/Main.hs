@@ -11,6 +11,7 @@
 module Main where
 
 import OptParser
+import CodeGen
 import REPL.Command (loadCmd,loadPrelude)
 import REPL.Haskeline
 import REPL.Monad (REPL,setREPLTitle,io,DotCryptol(..))
@@ -21,11 +22,13 @@ import Paths_cryptol (version)
 import Cryptol.Version (commitHash, commitBranch, commitDirty)
 import Data.Version (showVersion)
 import Cryptol.Utils.PP(pp)
-import Data.Char (isAlpha, toLower)
+import Cryptol.ModuleSystem (loadModuleByPath)
 import Data.List (intercalate)
+import Data.String (fromString)
 import Data.Monoid (mconcat)
 import System.Environment (getArgs,getProgName)
 import System.Exit (exitFailure)
+import System.IO (hPrint, hPutStrLn, stderr)
 import System.Console.GetOpt
     (OptDescr(..),ArgOrder(..),ArgDescr(..),getOpt,usageInfo)
 
@@ -39,16 +42,6 @@ data Options = Options
   , optGenerationRoot :: Maybe GenerationRoot
   , optTarget  :: GenerationTarget
   } deriving (Show)
-
-data GenerationRoot
-  = Identifier String
-  | Module     String
-  | File       FilePath
-  | Directory  FilePath
-  deriving (Eq, Ord, Read, Show)
-
-data GenerationTarget = SBVC | SV | BSV | Verilog
-  deriving (Bounded, Enum, Eq, Ord, Read, Show)
 
 defaultOptions :: Options
 defaultOptions  = Options
@@ -130,14 +123,16 @@ setDirectory path = modify $ \opts -> opts { optDirectory = Just path }
 setGenerationRoot :: String -> OptParser Options
 setGenerationRoot id = modify $ \opts -> opts { optGenerationRoot = Just (Identifier id) }
 
+-- | Check whether code-generation mode was requested.
+hasRoot :: Options -> Bool
+hasRoot Options { optGenerationRoot = Just _ } = True
+hasRoot _ = False
+
 -- | Choose a code generation target.
-setTarget target = case (flip lookup targetMapping . filter isAlpha . map toLower) target of
+setTarget target = case fromString target of
   Just t  -> modify $ \opts -> opts { optTarget = t }
   Nothing -> report $ "Unknown backend " ++ target ++
-                      ". Choices are " ++ knownTargets
-  where
-  targetMapping = [("sbvc", SBVC), ("sv", SV), ("bsv", BSV), ("verilog", Verilog)]
-  knownTargets = intercalate ", " (map fst targetMapping)
+                      ". Choices are " ++ intercalate ", " knownTargets
 
 -- | Parse arguments.
 parseArgs :: [String] -> Either [String] Options
@@ -173,9 +168,21 @@ main  = do
     Right opts
       | optHelp opts    -> displayHelp []
       | optVersion opts -> displayVersion
+      | hasRoot opts    -> codeGenFromOpts opts
       | otherwise       -> repl (optDotCryptol opts)
                                 (optBatch opts)
                                 (setupREPL opts)
+
+-- | Precondition: the generation root must be 'Just'.
+codeGenFromOpts :: Options -> IO ()
+codeGenFromOpts Options
+  { optGenerationRoot = Just root
+  , optDirectory      = outDir
+  , optTarget         = impl
+  , optLoad           = inFiles
+  } = case inFiles of
+  [f] -> loadModuleByPath f >>= either (hPrint stderr . pp) (codeGen outDir root impl) . fst
+  _   -> hPutStrLn stderr "Must specify exactly one file to load."
 
 setupREPL :: Options -> REPL ()
 setupREPL opts = do

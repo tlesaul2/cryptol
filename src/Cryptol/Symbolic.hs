@@ -269,7 +269,7 @@ existsFinType ty =
 data Env = Env
   { envVars :: Map.Map QName Value
   , envTypes :: Map.Map TVar TValue
-  , envIteSolver :: Bool
+  , envIteSolver :: Bool -- ^ Should we pay more (in terms of number of external SMT solver calls) to avoid more instances of non-terminating symbolic computations?
   }
 
 instance Monoid Env where
