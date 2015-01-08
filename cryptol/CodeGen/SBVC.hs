@@ -1,4 +1,4 @@
-{-# LANGUAGE DataKinds, EmptyDataDecls, GADTs, LambdaCase, PatternSynonyms #-}
+{-# LANGUAGE DataKinds, EmptyDataDecls, GADTs, LambdaCase, PatternSynonyms, RankNTypes, TypeFamilies #-}
 -- |
 -- Module      :  $Header$
 -- Copyright   :  (c) 2014-2015 Galois, Inc.
@@ -7,9 +7,11 @@
 -- Stability   :  provisional
 -- Portability :  portable
 
+-- TODO: inspect every case statement for semantic exhaustiveness
 module CodeGen.SBVC where
 
 import Control.Applicative
+import Data.List
 import Data.Map (Map)
 import Data.Maybe
 import Data.SBV
@@ -18,21 +20,24 @@ import System.IO
 import qualified Data.Map as M
 
 import Cryptol.Eval.Value
-import Cryptol.ModuleSystem
+import Cryptol.ModuleSystem (ModuleEnv(..))
 import Cryptol.Parser
 import Cryptol.Prims.Syntax
 import Cryptol.Utils.PP
 import Cryptol.Parser.AST (QName(..), Name(..), mkUnqual, mkQual, unqual) -- T.QName == P.QName
 import Cryptol.Parser.Position
 import Cryptol.TypeCheck.Defaulting
-import qualified Cryptol.Parser.AST    as P
-import qualified Cryptol.TypeCheck.AST as T
+import Cryptol.TypeCheck.Solver.InfNat (Nat'(..))
+import qualified Cryptol.Parser.AST     as P
+import qualified Cryptol.Symbolic       as S
+import qualified Cryptol.Symbolic.Value as S
+import qualified Cryptol.TypeCheck.AST  as T
 
 import CodeGen.Types
 
 -- | Find a declaration in a module.
-lookupVar :: QName -> T.Module -> [(T.Expr, T.Schema)]
-lookupVar qn mod =
+lookupDecl :: QName -> T.Module -> [(T.Expr, T.Schema)]
+lookupDecl qn mod =
   [(T.dDefinition decl, T.dSignature decl)
     | group <- T.mDecls mod
     , decl  <- T.groupDecls group
@@ -63,101 +68,124 @@ codeGen :: Maybe FilePath -> GenerationRoot -> (T.Module, ModuleEnv) -> IO ()
 codeGen dir (Identifier id) (mod, _) =
   case parseExpr id of
     Right e -> case dislocate e of
-      P.EVar qn -> case lookupVar qn mod of
+      P.EVar qn -> case lookupDecl qn mod of
         [(e, t)] -> case defaultExpr emptyRange {- TODO -} e t of
-          Just (subst, e) -> compileToC dir (cName qn) (codeGenImpl subst e)
+          Just (subst, e) -> compileToC dir (cName qn) (codeGenImpl subst e t)
           _ -> die $ "can't generate code for polymorphic expression " ++ id ++ " (and couldn't find a good way to monomorph it, either)"
         [] -> die $   "unknown identifier " ++ id
         _  -> die $ "ambiguous identifier " ++ id
       e -> die $ "looking for a variable name, got something more complicated instead\n" ++ show e
     Left err -> die $ id ++ " is not a valid variable name\n" ++ pretty err
 
-data MExpr a where
-  MCon :: MCon a -> MExpr a
-  MVar :: MName a -> MExpr a
-  MApp :: MExpr (a -> b) -> MExpr a -> MExpr b
-  MAbs :: MName a -> MExpr b -> MExpr (a -> b)
-
-data MName a
-data Array i e
-data MCon a
-
-data Expr where
-  ExprBox :: MExpr a -> Expr
-
-data CType a where
-  CBit   :: CType Bool
-  CSeq8  :: CType Word8
-  CSeq16 :: CType Word16
-  CSeq32 :: CType Word32
-
-lookupType :: [(T.TParam, T.Type)] -> T.TVar -> Maybe T.Type
-lookupType env (T.TVBound unique kind) = listToMaybe
-  [ t
-  | (T.TParam { T.tpUnique = unique', T.tpKind = kind' }, t) <- env
-  , unique == unique'
-  , kind   == kind'
-  ]
--- we can't hope for free type variables to be available in the binding
--- environment
-lookupType _ _ = Nothing
-
-closeType :: [(T.TParam, T.Type)] -> T.Type -> Maybe T.Type
-closeType env (T.TCon tcon ts)  = T.TCon tcon <$> mapM (closeType env) ts
-closeType env (T.TVar t)        = lookupType env t
-closeType env (T.TUser qn ts t) = T.TUser qn ts <$> closeType env t
-closeType env (T.TRec fields)   = T.TRec <$> mapM closeField fields where
-  closeField (n, t) = do
-    t' <- closeType env t
-    return (n, t')
-
-data SBVDynamic where
-  SBVDynamic :: CType a -> SBV a -> SBVDynamic
-
-data TEq a b where Refl :: TEq a a
-
-class Eq1 f where eq :: f a -> f b -> Maybe (TEq a b)
-instance Eq1 CType where
-  eq CBit   CBit   = Just Refl
-  eq CSeq8  CSeq8  = Just Refl
-  eq CSeq16 CSeq16 = Just Refl
-  eq CSeq32 CSeq32 = Just Refl
-  eq _ _ = Nothing
-
-flattenExpr :: T.Expr -> T.Expr
-flattenExpr = \case
-  e@(T.ETApp (T.ETApp (T.ECon ECDemote) _) _) -> e
-  T.EProofApp   e    -> flattenExpr e
-  T.ETApp       e _  -> flattenExpr e
-  T.ETAbs     _ e    -> flattenExpr e
-  T.EProofAbs _ e    -> flattenExpr e
-  T.EProofApp   e    -> flattenExpr e
-  T.EAbs    n t e    -> T.EAbs n t (flattenExpr e)
-  T.EApp        e e' -> T.EApp (flattenExpr e) (flattenExpr e')
-  e@(T.EVar{})       -> e
-  e@(T.ECon{})       -> e
-  e                  -> error ("unimplemented expression flattening: " ++ show e)
-
 pattern TConC h t = T.TCon (T.TC h) t
 pattern Word n = TConC T.TCSeq [TConC (T.TCNum n) [], TConC T.TCBit []]
 pattern Word8  = Word 8
 pattern Word16 = Word 16
 pattern Word32 = Word 32
+pattern tyIn :-> tyOut = TConC T.TCFun [tyIn, tyOut]
 
--- TODO
-codeGenImpl :: [(T.TParam, T.Type)] -> T.Expr -> SBVCodeGen ()
-codeGenImpl tyEnv = go M.empty . flattenExpr where
-  go tmEnv (T.EAbs n t e) = case closeType tyEnv t of
-    Just Word8 -> do
-      -- TODO: probably need to be careful about name clashes when calling
-      -- cName here
-      var <- cgInput (cName n)
-      go (M.insert n (SBVDynamic CSeq8 var) tmEnv) e
-    _ -> error ("don't know how to represent type: " ++ show t)
-  go tmEnv e@(T.EApp{}) = case genBody tmEnv e of
-    -- TODO: "result" seems like a good way to cause name clashes
-    SBVDynamic CSeq8 v -> cgOutput "result" v
-    _ -> error "couldn't work out how to represent computation result type"
-  go _ e = error ("code gen unimplemented for term: " ++ show e)
+data CodeGenValue
+  = CGBit    SBool          -- ^ Bit
+  | CGSeq    [CodeGenValue] -- ^ [n]a
+  | CGWord8  SWord8         -- ^ [8]
+  | CGWord16 SWord16        -- ^ [16]
+  | CGWord32 SWord32        -- ^ [32]
+  | CGFun (CodeGenValue -> CodeGenValue)  -- ^ functions
+  | CGPoly (TValue -> CodeGenValue)       -- ^ polymorphic values
+  | CGUninterpreted String [CodeGenValue] -- ^ function calls: function name and arguments
+  -- TODO: records, tuples, streams
 
-genBody = undefined
+unBit :: CodeGenValue -> Maybe SBool
+unBit (CGBit s) = Just s
+unBit _ = Nothing
+
+-- TODO: could try to do something smarter when the sequence contains just
+-- literals
+cgSeq xs = case mapM unBit xs of
+  Just bits -> case length bits of
+    8  -> CGWord8  (fromBitsBE bits)
+    16 -> CGWord16 (fromBitsBE bits)
+    32 -> CGWord32 (fromBitsBE bits)
+    _ -> CGSeq xs
+  _ -> CGSeq xs
+
+data Env = Env
+  { envVal  :: Map QName  CodeGenValue
+  , envType :: Map T.TVar TValue
+  }
+
+emptyEnv = Env M.empty M.empty
+
+bindVal   qn val env = env { envVal = M.insert qn val (envVal env) }
+lookupVal qn     env = M.lookup qn (envVal env)
+bindType n ty env = env -- TODO
+evalType env ty = TValue ty  -- TODO
+
+evalExpr :: Env -> T.Expr -> CodeGenValue
+evalExpr env = \case
+  T.ECon econ         -> evalECon econ
+  T.EVar n            -> case lookupVal n env of
+    Just x  -> x
+    Nothing -> CGUninterpreted (cName n) []
+  T.ETAbs tv e        -> CGPoly $ \ty -> evalExpr (bindType (T.tpVar tv) ty env) e
+  T.ETApp e ty        -> case eval e of CGPoly f -> f (evalType env ty)
+  T.EApp e e'         -> case eval e of
+    CGUninterpreted f vs -> CGUninterpreted f (vs ++ [eval e'])
+    CGFun f              -> f (eval e')
+  T.EAbs qn _ty e     -> CGFun $ \x -> evalExpr (bindVal qn x env) e
+  T.EProofAbs _prop e -> eval e
+  T.EProofApp e       -> eval e
+  where eval = evalExpr env
+
+evalECon :: ECon -> CodeGenValue
+evalECon = \case
+  ECPlus   -> binArith (+)
+  ECDemote -> CGPoly $ \value ->
+              CGPoly $ \width ->
+              case (numTValue value, numTValue width) of
+                (Nat val, Nat  8) -> CGWord8  (fromInteger val)
+                (Nat val, Nat 16) -> CGWord16 (fromInteger val)
+                (Nat val, Nat 32) -> CGWord32 (fromInteger val)
+                (Nat val, Nat  w) -> CGSeq [CGBit (fromBool (testBit val i)) | i <- [0..fromInteger w-1]]
+
+binArith :: (forall a. Num a => a -> a -> a) -> CodeGenValue
+binArith f = CGPoly $ \_ -> CGFun (CGFun . go) where
+  go (CGSeq   xs) (CGSeq   ys) = CGSeq (zipWith go xs ys)
+  go (CGWord8  x) (CGWord8  y) = CGWord8  (f x y)
+  go (CGWord16 x) (CGWord16 y) = CGWord16 (f x y)
+  go (CGWord32 x) (CGWord32 y) = CGWord32 (f x y)
+  -- TODO: CGUninterpreted
+
+codeGenImpl :: [(T.TParam, T.Type)] -> T.Expr -> T.Schema -> SBVCodeGen ()
+codeGenImpl tyEnv expr (T.Forall [] [] ty) =
+  supplyArgs v initTy >>= genOutput
+  where
+  initTy  = tValTy (evalType initEnv ty)
+  initEnv = foldr (\(tp, ty) -> bindType (tparamToTVar tp) (TValue ty))
+                  emptyEnv
+                  tyEnv
+  tparamToTVar tp = T.TVBound (T.tpUnique tp) (T.tpKind tp)
+  v = evalExpr initEnv expr
+
+  supplyArgs :: CodeGenValue -> T.Type -> SBVCodeGen CodeGenValue
+  supplyArgs (CGFun f) (tyIn :-> tyOut) = case tyIn of
+    Word8 -> cgInputWord8 >>= \v -> supplyArgs (f v) tyOut
+    _ -> error "dunno how to make something of that type"
+  supplyArgs v ty = return v
+
+  genOutput (CGWord8 w) = cgOutput "out" w
+
+cgInputWord8 :: SBVCodeGen CodeGenValue
+cgInputWord8 = CGWord8 <$> cgInput "in"
+
+--show' (CGRecord fields) = "{" ++ intercalate ", " [show n ++ "=" ++ show' v | (n, v) <- fields] ++ "}"
+--show' (CGTuple vs) = "(" ++ intercalate ", " (map show' vs) ++ ")"
+show' (CGBit b) = "bit"
+show' (CGSeq vs) = "[" ++ intercalate ", " (map show' vs) ++ "]"
+show' (CGWord8  w) = "word8"
+show' (CGWord16 w) = "word16"
+show' (CGWord32 w) = "word32"
+--show' (CGStream vs) = "stream" ++ show' (VSeq undefined vs)
+show' (CGFun f) = "function"
+show' (CGPoly f) = "type function"
+show' (CGUninterpreted f vs) = f ++ "(" ++ intercalate ", " (map show' vs) ++ ")"
