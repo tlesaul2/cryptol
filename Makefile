@@ -76,7 +76,7 @@ CRYPTOL_DEPS := \
 print-%:
 	@echo $* = $($*)
 
-${CS_BIN}/cryptol: ${CS_BIN}/alex ${CS_BIN}/happy $(CRYPTOL_DEPS) | ${CS}
+${CS_BIN}/cryptol ${CS_BIN}/cryptolgen: ${CS_BIN}/alex ${CS_BIN}/happy $(CRYPTOL_DEPS) | ${CS}
 	$(CABAL) install .
 
 ${CS_BIN}/cryptolnb: ${CS_BIN}/alex ${CS_BIN}/happy | ${CS}

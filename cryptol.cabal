@@ -219,3 +219,22 @@ executable cryptolnb
 
   if os(linux) && flag(static)
       ld-options:      -static -pthread
+
+executable cryptolgen
+  Default-language:
+    Haskell98
+  Main-is:             Main.hs
+  hs-source-dirs:      generator, cryptol
+  other-modules:       CodeGen,
+                       CodeGen.SBVC,
+                       CodeGen.Types,
+                       OptParser,
+                       Paths_cryptol
+  build-depends:       base,
+                       containers,
+                       cryptol
+  GHC-options:         -Wall -O2
+  ghc-prof-options:    -auto-all -prof -rtsopts
+
+  if os(linux) && flag(static)
+      ld-options:      -static -pthread

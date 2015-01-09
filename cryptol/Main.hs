@@ -11,7 +11,6 @@
 module Main where
 
 import OptParser
-import CodeGen
 import REPL.Command (loadCmd,loadPrelude)
 import REPL.Haskeline
 import REPL.Monad (REPL,setREPLTitle,io,DotCryptol(..))
@@ -22,13 +21,9 @@ import Paths_cryptol (version)
 import Cryptol.Version (commitHash, commitBranch, commitDirty)
 import Data.Version (showVersion)
 import Cryptol.Utils.PP(pp)
-import Cryptol.ModuleSystem (loadModuleByPath)
-import Data.List (intercalate)
-import Data.String (fromString)
 import Data.Monoid (mconcat)
 import System.Environment (getArgs,getProgName)
 import System.Exit (exitFailure)
-import System.IO (hPrint, hPutStrLn, stderr)
 import System.Console.GetOpt
     (OptDescr(..),ArgOrder(..),ArgDescr(..),getOpt,usageInfo)
 
@@ -38,9 +33,6 @@ data Options = Options
   , optHelp       :: Bool
   , optBatch      :: Maybe FilePath
   , optDotCryptol :: DotCryptol
-  , optDirectory      :: Maybe FilePath
-  , optGenerationRoot :: Maybe GenerationRoot
-  , optTarget  :: GenerationTarget
   } deriving (Show)
 
 defaultOptions :: Options
@@ -50,9 +42,6 @@ defaultOptions  = Options
   , optHelp       = False
   , optBatch      = Nothing
   , optDotCryptol = DotCDefault
-  , optDirectory      = Nothing
-  , optGenerationRoot = Nothing
-  , optTarget         = SBVC
   }
 
 options :: [OptDescr (OptParser Options)]
@@ -71,15 +60,6 @@ options  =
 
   , Option ""  ["cryptol-script"] (ReqArg addDotC "FILE")
     "read additional .cryptol files"
-
-  , Option "o" ["output-dir"] (ReqArg setDirectory "DIR")
-    "output directory for code generation (default stdout)"
-
-  , Option ""  ["root"] (ReqArg setGenerationRoot "UNIT")
-    "generate code for the specified identifier, module, file, or directory"
-
-  , Option "t" ["target"] (ReqArg setTarget "BACKEND")
-    "code generation backend (default SBV-C)"
   ]
 
 -- | Set a single file to be loaded.  This should be extended in the future, if
@@ -111,28 +91,6 @@ addDotC path = modify $ \ opts ->
     DotCDefault  -> opts { optDotCryptol = DotCFiles [path] }
     DotCDisabled -> opts
     DotCFiles xs -> opts { optDotCryptol = DotCFiles (path:xs) }
-
--- | Choose an output directory.
-setDirectory :: FilePath -> OptParser Options
-setDirectory path = modify $ \opts -> opts { optDirectory = Just path }
-
--- | Choose a unit for code generation. Heuristic: it's always an identifier.
--- This also signals that code generation should be performed instead of
--- dropping into the REPL.
--- XXX Use a better heuristic.
-setGenerationRoot :: String -> OptParser Options
-setGenerationRoot id = modify $ \opts -> opts { optGenerationRoot = Just (Identifier id) }
-
--- | Check whether code-generation mode was requested.
-hasRoot :: Options -> Bool
-hasRoot Options { optGenerationRoot = Just _ } = True
-hasRoot _ = False
-
--- | Choose a code generation target.
-setTarget target = case fromString target of
-  Just t  -> modify $ \opts -> opts { optTarget = t }
-  Nothing -> report $ "Unknown backend " ++ target ++
-                      ". Choices are " ++ intercalate ", " knownTargets
 
 -- | Parse arguments.
 parseArgs :: [String] -> Either [String] Options
@@ -168,21 +126,9 @@ main  = do
     Right opts
       | optHelp opts    -> displayHelp []
       | optVersion opts -> displayVersion
-      | hasRoot opts    -> codeGenFromOpts opts
       | otherwise       -> repl (optDotCryptol opts)
                                 (optBatch opts)
                                 (setupREPL opts)
-
--- | Precondition: the generation root must be 'Just'.
-codeGenFromOpts :: Options -> IO ()
-codeGenFromOpts Options
-  { optGenerationRoot = Just root
-  , optDirectory      = outDir
-  , optTarget         = impl
-  , optLoad           = inFiles
-  } = case inFiles of
-  [f] -> loadModuleByPath f >>= either (hPrint stderr . pp) (codeGen outDir root impl) . fst
-  _   -> hPutStrLn stderr "Must specify exactly one file to load."
 
 setupREPL :: Options -> REPL ()
 setupREPL opts = do
