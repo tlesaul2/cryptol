@@ -10,74 +10,51 @@
 
 module Main where
 
-import OptParser
+import Options
+
 import REPL.Command (loadCmd,loadPrelude)
 import REPL.Haskeline
 import REPL.Monad (REPL,setREPLTitle,io,DotCryptol(..))
 import REPL.Logo
 import qualified REPL.Monad as REPL
-import Paths_cryptol (version)
 
-import Cryptol.Version (commitHash, commitBranch, commitDirty)
-import Data.Version (showVersion)
 import Cryptol.Utils.PP(pp)
-import Data.Monoid (mconcat)
-import System.Environment (getArgs,getProgName)
-import System.Exit (exitFailure)
-import System.Console.GetOpt
-    (OptDescr(..),ArgOrder(..),ArgDescr(..),getOpt,usageInfo)
 
-data Options = Options
+data REPLOptions = REPLOptions
   { optLoad       :: [FilePath]
-  , optVersion    :: Bool
-  , optHelp       :: Bool
   , optBatch      :: Maybe FilePath
   , optDotCryptol :: DotCryptol
   } deriving (Show)
 
-defaultOptions :: Options
-defaultOptions  = Options
-  { optLoad       = []
-  , optVersion    = False
-  , optHelp       = False
-  , optBatch      = Nothing
-  , optDotCryptol = DotCDefault
+argParser :: ArgParser REPLOptions
+argParser = ArgParser
+  { nonOptions  = ReturnInOrder addFile
+  , defOptions  = defaultOptions REPLOptions
+    { optLoad       = []
+    , optBatch      = Nothing
+    , optDotCryptol = DotCDefault
+    }
+  , description = defaultDescription
+    [ Option "b" ["batch"] (ReqArg setBatchScript "FILE")
+      "run the script provided and exit"
+
+    , Option ""  ["ignore-dot-cryptol"] (NoArg setDotCDisabled)
+      "disable reading of .cryptol files"
+
+    , Option ""  ["cryptol-script"] (ReqArg addDotC "FILE")
+      "read additional .cryptol files"
+    ]
+  , toolName = "Cryptol"
   }
-
-options :: [OptDescr (OptParser Options)]
-options  =
-  [ Option "b" ["batch"] (ReqArg setBatchScript "FILE")
-    "run the script provided and exit"
-
-  , Option "v" ["version"] (NoArg setVersion)
-    "display version number"
-
-  , Option "h" ["help"] (NoArg setHelp)
-    "display this message"
-
-  , Option ""  ["ignore-dot-cryptol"] (NoArg setDotCDisabled)
-    "disable reading of .cryptol files"
-
-  , Option ""  ["cryptol-script"] (ReqArg addDotC "FILE")
-    "read additional .cryptol files"
-  ]
 
 -- | Set a single file to be loaded.  This should be extended in the future, if
 -- we ever plan to allow multiple files to be loaded at the same time.
-addFile :: String -> OptParser Options
-addFile path = modify $ \ opts -> opts { optLoad = [ path ] }
+addFile :: String -> OptParser (Options REPLOptions)
+addFile path = modifyOpt $ \ opts -> opts { optLoad = [ path ] }
 
 -- | Set a batch script to be run.
-setBatchScript :: String -> OptParser Options
-setBatchScript path = modify $ \ opts -> opts { optBatch = Just path }
-
--- | Signal that version should be displayed.
-setVersion :: OptParser Options
-setVersion  = modify $ \ opts -> opts { optVersion = True }
-
--- | Signal that help should be displayed.
-setHelp :: OptParser Options
-setHelp  = modify $ \ opts -> opts { optHelp = True }
+setBatchScript :: String -> OptParser (Options REPLOptions)
+setBatchScript path = modifyOpt $ \ opts -> opts { optBatch = Just path }
 
 -- | Disable .cryptol files entirely
 setDotCDisabled :: OptParser Options
@@ -92,45 +69,12 @@ addDotC path = modify $ \ opts ->
     DotCDisabled -> opts
     DotCFiles xs -> opts { optDotCryptol = DotCFiles (path:xs) }
 
--- | Parse arguments.
-parseArgs :: [String] -> Either [String] Options
-parseArgs args = case getOpt (ReturnInOrder addFile) options args of
-  (ps,[],[]) -> runOptParser defaultOptions (mconcat ps)
-  (_,_,errs) -> Left errs
-
-displayVersion :: IO ()
-displayVersion = do
-    let ver = showVersion version
-    putStrLn ("Cryptol " ++ ver)
-    putStrLn ("Git commit " ++ commitHash)
-    putStrLn ("    branch " ++ commitBranch ++ dirtyLab)
-      where
-      dirtyLab | commitDirty = " (non-committed files present during build)"
-               | otherwise   = ""
-
-displayHelp :: [String] -> IO ()
-displayHelp errs = do
-  prog <- getProgName
-  let banner = "Usage: " ++ prog ++ " [OPTIONS]"
-  putStrLn (usageInfo (unlines errs ++ banner) options)
-
 main :: IO ()
 main  = do
-  args <- getArgs
-  case parseArgs args of
+  opts <- getOpts argParser
+  repl (optDotCryptol opts) (optBatch opts) (setupREPL opts)
 
-    Left errs -> do
-      displayHelp errs
-      exitFailure
-
-    Right opts
-      | optHelp opts    -> displayHelp []
-      | optVersion opts -> displayVersion
-      | otherwise       -> repl (optDotCryptol opts)
-                                (optBatch opts)
-                                (setupREPL opts)
-
-setupREPL :: Options -> REPL ()
+setupREPL :: REPLOptions -> REPL ()
 setupREPL opts = do
   displayLogo True
   setREPLTitle

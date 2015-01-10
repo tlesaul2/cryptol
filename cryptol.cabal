@@ -171,6 +171,7 @@ executable cryptol
   Main-is:             Main.hs
   hs-source-dirs:      cryptol
   Other-modules:       OptParser,
+                       Options,
                        REPL.Command,
                        REPL.Haskeline,
                        REPL.Monad,
@@ -229,6 +230,7 @@ executable cryptolgen
                        CodeGen.SBVC,
                        CodeGen.Types,
                        OptParser,
+                       Options,
                        Paths_cryptol
   build-depends:       base,
                        containers,
