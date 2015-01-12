@@ -57,13 +57,13 @@ setBatchScript :: String -> OptParser (Options REPLOptions)
 setBatchScript path = modifyOpt $ \ opts -> opts { optBatch = Just path }
 
 -- | Disable .cryptol files entirely
-setDotCDisabled :: OptParser Options
-setDotCDisabled  = modify $ \ opts -> opts { optDotCryptol = DotCDisabled }
+setDotCDisabled :: OptParser (Options REPLOptions)
+setDotCDisabled  = modifyOpt $ \ opts -> opts { optDotCryptol = DotCDisabled }
 
 -- | Add another file to read as a .cryptol file, unless .cryptol
 -- files have been disabled
-addDotC :: String -> OptParser Options
-addDotC path = modify $ \ opts ->
+addDotC :: String -> OptParser (Options REPLOptions)
+addDotC path = modifyOpt $ \ opts ->
   case optDotCryptol opts of
     DotCDefault  -> opts { optDotCryptol = DotCFiles [path] }
     DotCDisabled -> opts
