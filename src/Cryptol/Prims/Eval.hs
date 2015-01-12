@@ -304,63 +304,30 @@ liftBinArith op _ = op
 type BinArith = Integer -> Integer -> Integer -> Integer
 
 arithBinary :: BinArith -> Binary
-arithBinary op = loop
+arithBinary op = loop . toTypeVal
   where
-  loop ty l r
-
-    | Just (len,a) <- isTSeq ty = case numTValue len of
-
-      -- words and finite sequences
-      Nat w | isTBit a  -> VWord (mkBv w (op w (fromWord l) (fromWord r)))
-            | otherwise -> VSeq False (zipWith (loop a) (fromSeq l) (fromSeq r))
-
-      -- streams
-      Inf -> toStream (zipWith (loop a) (fromSeq l) (fromSeq r))
-
-    -- functions
-    | Just (_,ety) <- isTFun ty =
-      lam $ \ x -> loop ety (fromVFun l x) (fromVFun r x)
-
-    -- tuples
-    | Just (_,tys) <- isTTuple ty =
-      let ls = fromVTuple l
-          rs = fromVTuple r
-       in VTuple (zipWith3 loop tys ls rs)
-
-    -- records
-    | Just fs <- isTRec ty =
-      VRecord [ (f, loop fty (lookupRecord f l) (lookupRecord f r))
-              | (f,fty) <- fs ]
-
-    | otherwise = evalPanic "arithBinop" ["Invalid arguments"]
+  loop ty l r = case ty of
+    TVBit         -> evalPanic "arithBinop" ["Invalid arguments"]
+    TVSeq w TVBit -> VWord (mkBv w (op w (fromWord l) (fromWord r)))
+    TVSeq _ t     -> VSeq False (zipWith (loop t) (fromSeq l) (fromSeq r))
+    TVStream t    -> toStream (zipWith (loop t) (fromSeq l) (fromSeq r))
+    TVTuple ts    -> VTuple (zipWith3 loop ts (fromVTuple l) (fromVTuple r))
+    TVRecord fs   -> VRecord [ (f, loop fty (lookupRecord f l) (lookupRecord f r))
+                             | (f, fty) <- fs ]
+    TVFun _ t     -> lam $ \ x -> loop t (fromVFun l x) (fromVFun r x)
 
 arithUnary :: (Integer -> Integer) -> Unary
-arithUnary op = loop
+arithUnary op = loop . toTypeVal
   where
-  loop ty x
-
-    | Just (len,a) <- isTSeq ty = case numTValue len of
-
-      -- words and finite sequences
-      Nat w | isTBit a  -> VWord (mkBv w (op (fromWord x)))
-            | otherwise -> VSeq False (map (loop a) (fromSeq x))
-
-      Inf -> toStream (map (loop a) (fromSeq x))
-
-    -- functions
-    | Just (_,ety) <- isTFun ty =
-      lam $ \ y -> loop ety (fromVFun x y)
-
-    -- tuples
-    | Just (_,tys) <- isTTuple ty =
-      let as = fromVTuple x
-       in VTuple (zipWith loop tys as)
-
-    -- records
-    | Just fs <- isTRec ty =
-      VRecord [ (f, loop fty (lookupRecord f x)) | (f,fty) <- fs ]
-
-    | otherwise = evalPanic "arithUnary" ["Invalid arguments"]
+  loop ty x = case ty of
+    TVBit         -> evalPanic "arithUnary" ["Invalid arguments"]
+    TVSeq w TVBit -> VWord (mkBv w (op (fromWord x)))
+    TVSeq _ t     -> VSeq False (map (loop t) (fromSeq x))
+    TVStream t    -> toStream (map (loop t) (fromSeq x))
+    TVTuple ts    -> VTuple (zipWith loop ts (fromVTuple x))
+    TVRecord fs   -> VRecord [ (f, loop fty (lookupRecord f x))
+                             | (f, fty) <- fs ]
+    TVFun _ t     -> lam $ \ y -> loop t (fromVFun x y)
 
 lg2 :: Integer -> Integer
 lg2 i = case genLog i 2 of

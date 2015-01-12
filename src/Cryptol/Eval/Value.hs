@@ -106,6 +106,26 @@ newtype TValue = TValue { tValTy :: Type }
 instance Show TValue where
   showsPrec p (TValue v) = showsPrec p v
 
+-- | An easy-to-use alternative representation for type `TValue`.
+data TypeVal w
+  = TVBit
+  | TVSeq w (TypeVal w)
+  | TVStream (TypeVal w)
+  | TVTuple [TypeVal w]
+  | TVRecord [(Name, TypeVal w)]
+  | TVFun (TypeVal w) (TypeVal w)
+
+toTypeVal :: Num width => TValue -> TypeVal width
+toTypeVal ty
+  | isTBit ty                    = TVBit
+  | Just (n, ety) <- isTSeq ty   = case numTValue n of
+                                     Nat w -> TVSeq (fromInteger w) (toTypeVal ety)
+                                     Inf   -> TVStream (toTypeVal ety)
+  | Just (aty, bty) <- isTFun ty = TVFun (toTypeVal aty) (toTypeVal bty)
+  | Just (_, tys) <- isTTuple ty = TVTuple (map toTypeVal tys)
+  | Just fields <- isTRec ty     = TVRecord [ (n, toTypeVal aty) | (n, aty) <- fields ]
+  | otherwise                    = panic "Cryptol.Symbolic.Prims.toTypeVal" [ "bad TValue" ]
+
 
 -- Pretty Printing -------------------------------------------------------------
 

@@ -15,6 +15,7 @@ import Control.Applicative
 import Data.Bits
 import Data.List (genericDrop, genericReplicate, genericSplitAt, genericTake, transpose)
 
+import Cryptol.Eval.Value (TypeVal(..), toTypeVal)
 import Cryptol.Prims.Eval (binary, unary, tlamN)
 import Cryptol.Prims.Syntax (ECon(..))
 import Cryptol.Symbolic.BitVector
@@ -361,28 +362,6 @@ ecDemoteV = tlam $ \valT ->
                        , show valT
                        , show bitT
                        ]
-
--- Type Values -----------------------------------------------------------------
-
--- | An easy-to-use alternative representation for type `TValue`.
-data TypeVal
-  = TVBit
-  | TVSeq Int TypeVal
-  | TVStream TypeVal
-  | TVTuple [TypeVal]
-  | TVRecord [(Name, TypeVal)]
-  | TVFun TypeVal TypeVal
-
-toTypeVal :: TValue -> TypeVal
-toTypeVal ty
-  | isTBit ty                    = TVBit
-  | Just (n, ety) <- isTSeq ty   = case numTValue n of
-                                     Nat w -> TVSeq (fromInteger w) (toTypeVal ety)
-                                     Inf   -> TVStream (toTypeVal ety)
-  | Just (aty, bty) <- isTFun ty = TVFun (toTypeVal aty) (toTypeVal bty)
-  | Just (_, tys) <- isTTuple ty = TVTuple (map toTypeVal tys)
-  | Just fields <- isTRec ty     = TVRecord [ (n, toTypeVal aty) | (n, aty) <- fields ]
-  | otherwise                    = panic "Cryptol.Symbolic.Prims.toTypeVal" [ "bad TValue" ]
 
 -- Arith -----------------------------------------------------------------------
 
