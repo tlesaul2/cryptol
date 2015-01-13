@@ -90,9 +90,9 @@ evalECon ec = case ec of
   ECMul         -> binary (arithBinary (liftBinArith (*)))
   ECDiv         -> binary (arithBinary (liftBinArith divWrap))
   ECMod         -> binary (arithBinary (liftBinArith modWrap))
-  ECExp         -> binary (arithBinary modExp)
-  ECLg2         -> unary  (arithUnary lg2)
-  ECNeg         -> unary  (arithUnary negate)
+  ECExp         -> binary (arithBinary (liftTriArith modExp))
+  ECLg2         -> unary  (arithUnary  (liftUnArith  lg2))
+  ECNeg         -> unary  (arithUnary  (liftUnArith  negate))
   ECLt          -> binary (cmpOrder (\o -> o == LT           ))
   ECGt          -> binary (cmpOrder (\o -> o == GT           ))
   ECLtEq        -> binary (cmpOrder (\o -> o == LT || o == EQ))
@@ -297,18 +297,23 @@ unary f = tlam $ \ ty ->
 
 -- Arith -----------------------------------------------------------------------
 
+-- | Turn a binop on Integers that understands widths into one that can handle
+-- bitvectors.
+liftTriArith :: (Integer -> Integer -> Integer -> Integer) -> BinArith BV
+liftTriArith op w l r = mkBv w (op w (fromBV l) (fromBV r))
+
 -- | Turn a normal binop on Integers into one that can also deal with a bitsize.
-liftBinArith :: (Integer -> Integer -> Integer) -> BinArith
-liftBinArith op _ = op
+liftBinArith :: (Integer -> Integer -> Integer) -> BinArith BV
+liftBinArith op = liftTriArith (\_ -> op)
 
-type BinArith = Integer -> Integer -> Integer -> Integer
+type BinArith w = Integer -> w -> w -> w
 
-arithBinary :: BinArith -> Binary
+arithBinary :: BitWord b w => BinArith w -> GenBinary b w
 arithBinary op = loop . toTypeVal
   where
   loop ty l r = case ty of
     TVBit         -> evalPanic "arithBinop" ["Invalid arguments"]
-    TVSeq w TVBit -> VWord (mkBv w (op w (fromWord l) (fromWord r)))
+    TVSeq w TVBit -> VWord (op w (fromVWord l) (fromVWord r))
     TVSeq _ t     -> VSeq False (zipWith (loop t) (fromSeq l) (fromSeq r))
     TVStream t    -> toStream (zipWith (loop t) (fromSeq l) (fromSeq r))
     TVTuple ts    -> VTuple (zipWith3 loop ts (fromVTuple l) (fromVTuple r))
@@ -316,12 +321,18 @@ arithBinary op = loop . toTypeVal
                              | (f, fty) <- fs ]
     TVFun _ t     -> lam $ \ x -> loop t (fromVFun l x) (fromVFun r x)
 
-arithUnary :: (Integer -> Integer) -> Unary
+-- | Turn a normal unop on Integers into one that understands bitvectors.
+liftUnArith :: (Integer -> Integer) -> UnArith BV
+liftUnArith op w = mkBv w . op . fromBV
+
+type UnArith w = Integer -> w -> w
+
+arithUnary :: BitWord b w => UnArith w -> GenUnary b w
 arithUnary op = loop . toTypeVal
   where
   loop ty x = case ty of
     TVBit         -> evalPanic "arithUnary" ["Invalid arguments"]
-    TVSeq w TVBit -> VWord (mkBv w (op (fromWord x)))
+    TVSeq w TVBit -> VWord (op w (fromVWord x))
     TVSeq _ t     -> VSeq False (map (loop t) (fromSeq x))
     TVStream t    -> toStream (map (loop t) (fromSeq x))
     TVTuple ts    -> VTuple (zipWith loop ts (fromVTuple x))

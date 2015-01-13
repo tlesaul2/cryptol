@@ -328,9 +328,11 @@ vWordLen val = case val of
 
 -- | Turn a value into an integer represented by w bits.
 fromWord :: Value -> Integer
-fromWord val = mask w a
-  where
-  BV w a = fromVWord val
+fromWord = fromBV . fromVWord
+
+-- | Extract the bits from a bit vector.
+fromBV :: BV -> Integer
+fromBV (BV w a) = mask w a
 
 -- | Extract a function from a value.
 fromVFun :: GenValue b w -> (GenValue b w -> GenValue b w)

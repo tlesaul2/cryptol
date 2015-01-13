@@ -27,6 +27,7 @@ import Cryptol.Utils.Panic
 import qualified Data.SBV as SBV
 import Data.SBV (SBool)
 import qualified Data.SBV.Tools.Polynomial as Poly
+import qualified Cryptol.Prims.Eval as Eval
 
 traverseSnd :: Functor f => (a -> f b) -> (t, a) -> f (t, b)
 traverseSnd f (x, y) = (,) x <$> f y
@@ -370,31 +371,11 @@ type Unary = TValue -> Value -> Value
 
 -- | Models functions of type `{a} (Arith a) => a -> a -> a`
 arithBinary :: (SWord -> SWord -> SWord) -> Binary
-arithBinary op = loop . toTypeVal
-  where
-    loop ty l r =
-      case ty of
-        TVBit         -> evalPanic "arithBinop" ["Invalid arguments"]
-        TVSeq _ TVBit -> VWord (op (fromVWord l) (fromVWord r))
-        TVSeq _ t     -> VSeq False (zipWith (loop t) (fromSeq l) (fromSeq r))
-        TVStream t    -> VStream (zipWith (loop t) (fromSeq l) (fromSeq r))
-        TVTuple ts    -> VTuple (zipWith3 loop ts (fromVTuple l) (fromVTuple r))
-        TVRecord fs   -> VRecord [ (f, loop t (lookupRecord f l) (lookupRecord f r)) | (f, t) <- fs ]
-        TVFun _ t     -> VFun (\x -> loop t (fromVFun l x) (fromVFun r x))
+arithBinary op = Eval.arithBinary (\_ -> op)
 
 -- | Models functions of type `{a} (Arith a) => a -> a`
 arithUnary :: (SWord -> SWord) -> Unary
-arithUnary op = loop . toTypeVal
-  where
-    loop ty v =
-      case ty of
-        TVBit         -> evalPanic "arithUnary" ["Invalid arguments"]
-        TVSeq _ TVBit -> VWord (op (fromVWord v))
-        TVSeq _ t     -> VSeq False (map (loop t) (fromSeq v))
-        TVStream t    -> VStream (map (loop t) (fromSeq v))
-        TVTuple ts    -> VTuple (zipWith loop ts (fromVTuple v))
-        TVRecord fs   -> VRecord [ (f, loop t (lookupRecord f v)) | (f, t) <- fs ]
-        TVFun _ t     -> VFun (\x -> loop t (fromVFun v x))
+arithUnary op = Eval.arithUnary (\_ -> op)
 
 sExp :: SWord -> SWord -> SWord
 sExp x y = go (SBV.blastLE y)
