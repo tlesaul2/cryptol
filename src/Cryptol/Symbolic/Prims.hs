@@ -371,7 +371,9 @@ type Unary = TValue -> Value -> Value
 
 -- | Models functions of type `{a} (Arith a) => a -> a -> a`
 arithBinary :: (SWord -> SWord -> SWord) -> Binary
-arithBinary op = Eval.arithBinary (\_ -> op)
+arithBinary op = Eval.pointwiseBinary
+  (evalPanic "Cryptol.Symbolic.Prims.arithBinary" ["Unexpected Bits in arithmetic expression"])
+  (\_ -> op)
 
 -- | Models functions of type `{a} (Arith a) => a -> a`
 arithUnary :: (SWord -> SWord) -> Unary
@@ -499,30 +501,10 @@ finChunksOf parts each xs = let (as,bs) = genericSplitAt each xs
 
 -- | Merge two values given a binop.  This is used for and, or and xor.
 logicBinary :: (SBool -> SBool -> SBool) -> (SWord -> SWord -> SWord) -> Binary
-logicBinary bop op = loop . toTypeVal
-  where
-    loop ty l r =
-      case ty of
-        TVBit         -> VBit (bop (fromVBit l) (fromVBit r))
-        TVSeq _ TVBit -> VWord (op (fromVWord l) (fromVWord r))
-        TVSeq _ t     -> VSeq False (zipWith (loop t) (fromSeq l) (fromSeq r))
-        TVStream t    -> VStream (zipWith (loop t) (fromSeq l) (fromSeq r))
-        TVTuple ts    -> VTuple (zipWith3 loop ts (fromVTuple l) (fromVTuple r))
-        TVRecord fs   -> VRecord [ (f, loop t (lookupRecord f l) (lookupRecord f r)) | (f, t) <- fs ]
-        TVFun _ t     -> VFun (\x -> loop t (fromVFun l x) (fromVFun r x))
+logicBinary bop op = Eval.pointwiseBinary bop (\_ -> op)
 
 logicUnary :: (SBool -> SBool) -> (SWord -> SWord) -> Unary
-logicUnary bop op = loop . toTypeVal
-  where
-    loop ty v =
-      case ty of
-        TVBit         -> VBit (bop (fromVBit v))
-        TVSeq _ TVBit -> VWord (op (fromVWord v))
-        TVSeq _ t     -> VSeq False (map (loop t) (fromSeq v))
-        TVStream t    -> VStream (map (loop t) (fromSeq v))
-        TVTuple ts    -> VTuple (zipWith loop ts (fromVTuple v))
-        TVRecord fs   -> VRecord [ (f, loop t (lookupRecord f v)) | (f, t) <- fs ]
-        TVFun _ t     -> VFun (\x -> loop t (fromVFun v x))
+logicUnary bop op = Eval.pointwiseUnary bop (\_ -> op)
 
 -- @[ 0, 1 .. ]@
 fromThenV :: Value

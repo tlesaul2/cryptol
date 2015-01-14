@@ -90,7 +90,7 @@ evalECon ec = case ec of
   ECMul         -> binary (arithBinary (liftBinArith (*)))
   ECDiv         -> binary (arithBinary (liftBinArith divWrap))
   ECMod         -> binary (arithBinary (liftBinArith modWrap))
-  ECExp         -> binary (arithBinary (liftTriArith modExp))
+  ECExp         -> binary (arithBinary (liftBinBV    modExp))
   ECLg2         -> unary  (arithUnary  (liftUnArith  lg2))
   ECNeg         -> unary  (arithUnary  (liftUnArith  negate))
   ECLt          -> binary (cmpOrder (\o -> o == LT           ))
@@ -299,20 +299,24 @@ unary f = tlam $ \ ty ->
 
 -- | Turn a binop on Integers that understands widths into one that can handle
 -- bitvectors.
-liftTriArith :: (Integer -> Integer -> Integer -> Integer) -> BinArith BV
-liftTriArith op w l r = mkBv w (op w (fromBV l) (fromBV r))
+liftBinBV :: (Integer -> BinOp Integer) -> (Integer -> BinOp BV)
+liftBinBV op w l r = mkBv w (op w (fromBV l) (fromBV r))
+
+liftUnBV :: (Integer -> UnOp Integer) -> (Integer -> UnOp BV)
+liftUnBV op w x = mkBv w (op w (fromBV x))
 
 -- | Turn a normal binop on Integers into one that can also deal with a bitsize.
 liftBinArith :: (Integer -> Integer -> Integer) -> BinArith BV
-liftBinArith op = liftTriArith (\_ -> op)
+liftBinArith op = liftBinBV (\_ -> op)
 
-type BinArith w = Integer -> w -> w -> w
+type BinOp w = w -> w -> w
+type BinArith w = Integer -> BinOp w
 
-arithBinary :: BitWord b w => BinArith w -> GenBinary b w
-arithBinary op = loop . toTypeVal
+pointwiseBinary :: BitWord b w => BinOp b -> (Integer -> BinOp w) -> GenBinary b w
+pointwiseBinary bop op = loop . toTypeVal
   where
   loop ty l r = case ty of
-    TVBit         -> evalPanic "arithBinop" ["Invalid arguments"]
+    TVBit         -> VBit (bop (fromVBit l) (fromVBit r))
     TVSeq w TVBit -> VWord (op w (fromVWord l) (fromVWord r))
     TVSeq _ t     -> VSeq False (zipWith (loop t) (fromSeq l) (fromSeq r))
     TVStream t    -> toStream (zipWith (loop t) (fromSeq l) (fromSeq r))
@@ -321,17 +325,21 @@ arithBinary op = loop . toTypeVal
                              | (f, fty) <- fs ]
     TVFun _ t     -> lam $ \ x -> loop t (fromVFun l x) (fromVFun r x)
 
+arithBinary :: BitWord b w => BinArith w -> GenBinary b w
+arithBinary = pointwiseBinary (evalPanic "arithBinary" ["Invalid arguments"])
+
 -- | Turn a normal unop on Integers into one that understands bitvectors.
 liftUnArith :: (Integer -> Integer) -> UnArith BV
 liftUnArith op w = mkBv w . op . fromBV
 
+type UnOp w = w -> w
 type UnArith w = Integer -> w -> w
 
-arithUnary :: BitWord b w => UnArith w -> GenUnary b w
-arithUnary op = loop . toTypeVal
+pointwiseUnary :: BitWord b w => UnOp b -> (Integer -> UnOp w) -> GenUnary b w
+pointwiseUnary bop op = loop . toTypeVal
   where
   loop ty x = case ty of
-    TVBit         -> evalPanic "arithUnary" ["Invalid arguments"]
+    TVBit         -> VBit (bop (fromVBit x))
     TVSeq w TVBit -> VWord (op w (fromVWord x))
     TVSeq _ t     -> VSeq False (map (loop t) (fromSeq x))
     TVStream t    -> toStream (map (loop t) (fromSeq x))
@@ -339,6 +347,9 @@ arithUnary op = loop . toTypeVal
     TVRecord fs   -> VRecord [ (f, loop fty (lookupRecord f x))
                              | (f, fty) <- fs ]
     TVFun _ t     -> lam $ \ y -> loop t (fromVFun x y)
+
+arithUnary :: BitWord b w => UnArith w -> GenUnary b w
+arithUnary = pointwiseUnary (evalPanic "arithUnary" ["Invalid arguments"])
 
 lg2 :: Integer -> Integer
 lg2 i = case genLog i 2 of
@@ -509,66 +520,10 @@ ccatV front back elty l r =
 
 -- | Merge two values given a binop.  This is used for and, or and xor.
 logicBinary :: (forall a. Bits a => a -> a -> a) -> Binary
-logicBinary op = loop
-  where
-  loop ty l r
-    | isTBit ty = VBit (op (fromVBit l) (fromVBit r))
-    | Just (len,aty) <- isTSeq ty =
-
-      case numTValue len of
-
-         -- words or finite sequences
-         Nat w | isTBit aty -> VWord (mkBv w (op (fromWord l) (fromWord r)))
-               | otherwise -> VSeq False (zipWith (loop aty) (fromSeq l)
-                                                             (fromSeq r))
-
-         -- streams
-         Inf -> toStream (zipWith (loop aty) (fromSeq l) (fromSeq r))
-
-    | Just (_,etys) <- isTTuple ty =
-      let ls = fromVTuple l
-          rs = fromVTuple r
-       in VTuple (zipWith3 loop etys ls rs)
-
-    | Just (_,bty) <- isTFun ty =
-      lam $ \ a -> loop bty (fromVFun l a) (fromVFun r a)
-
-    | Just fields <- isTRec ty =
-      VRecord [ (f,loop fty a b) | (f,fty) <- fields
-                                 , let a = lookupRecord f l
-                                       b = lookupRecord f r
-                                 ]
-
-    | otherwise = evalPanic "logicBinary" ["invalid logic type"]
+logicBinary op = pointwiseBinary op (liftBinBV (\_ -> op))
 
 logicUnary :: (forall a. Bits a => a -> a) -> Unary
-logicUnary op = loop
-  where
-  loop ty val
-    | isTBit ty = VBit (op (fromVBit val))
-
-    | Just (len,ety) <- isTSeq ty =
-
-      case numTValue len of
-
-         -- words or finite sequences
-         Nat w | isTBit ety -> VWord (mkBv w (op (fromWord val)))
-               | otherwise -> VSeq False (map (loop ety) (fromSeq val))
-
-         -- streams
-         Inf -> toStream (map (loop ety) (fromSeq val))
-
-    | Just (_,etys) <- isTTuple ty =
-      let as = fromVTuple val
-       in VTuple (zipWith loop etys as)
-
-    | Just (_,bty) <- isTFun ty =
-      lam $ \ a -> loop bty (fromVFun val a)
-
-    | Just fields <- isTRec ty =
-      VRecord [ (f,loop fty a) | (f,fty) <- fields, let a = lookupRecord f val ]
-
-    | otherwise = evalPanic "logicUnary" ["invalid logic type"]
+logicUnary op = pointwiseUnary op (liftUnBV (\_ -> op))
 
 
 logicShift :: (Integer -> Integer -> Int -> Integer)
