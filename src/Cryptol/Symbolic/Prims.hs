@@ -22,6 +22,7 @@ import Cryptol.Symbolic.BitVector
 import Cryptol.Symbolic.Value
 import Cryptol.TypeCheck.AST (Name)
 import Cryptol.TypeCheck.Solver.InfNat(Nat'(..), nMul)
+import Cryptol.Utils.Compare
 import Cryptol.Utils.Panic
 
 import qualified Data.SBV as SBV
@@ -51,41 +52,31 @@ evalECon econ =
     ECLg2         -> unary (arithUnary sLg2) -- {a} (Arith a) => a -> a
     ECNeg         -> unary (arithUnary negate)
 
-    ECLt          -> binary (cmpBinary cmpLt cmpLt SBV.false)
-    ECGt          -> binary (cmpBinary cmpGt cmpGt SBV.false)
-    ECLtEq        -> binary (cmpBinary cmpLtEq cmpLtEq SBV.true)
-    ECGtEq        -> binary (cmpBinary cmpGtEq cmpGtEq SBV.true)
-    ECEq          -> binary (cmpBinary cmpEq cmpEq SBV.true)
-    ECNotEq       -> binary (cmpBinary cmpNotEq cmpNotEq SBV.false)
+    ECLt          -> binary (Eval.cmpOrder lt )
+    ECGt          -> binary (Eval.cmpOrder gt )
+    ECLtEq        -> binary (Eval.cmpOrder ngt)
+    ECGtEq        -> binary (Eval.cmpOrder nlt)
+    ECEq          -> binary (Eval.cmpOrder eq )
+    ECNotEq       -> binary (Eval.cmpOrder neq)
 
     -- FIXME: the next 4 "primitives" should be defined in the Cryptol prelude.
     ECFunEq       -> -- {a b} (Cmp b) => (a -> b) -> (a -> b) -> a -> Bit
       -- (f === g) x = (f x == g x)
-      tlam $ \_ ->
-      tlam $ \b ->
-      VFun $ \f ->
-      VFun $ \g ->
-      VFun $ \x -> cmpBinary cmpEq cmpEq SBV.true b (fromVFun f x) (fromVFun g x)
+      Eval.funCmp eq
 
     ECFunNotEq    -> -- {a b} (Cmp b) => (a -> b) -> (a -> b) -> a -> Bit
       -- (f !== g) x = (f x != g x)
-      tlam $ \_ ->
-      tlam $ \b ->
-      VFun $ \f ->
-      VFun $ \g ->
-      VFun $ \x -> cmpBinary cmpNotEq cmpNotEq SBV.false b (fromVFun f x) (fromVFun g x)
+      Eval.funCmp neq
 
     ECMin         -> -- {a} (Cmp a) => a -> a -> a
       -- min x y = if x <= y then x else y
       binary $ \a x y ->
-        let c = cmpBinary cmpLtEq cmpLtEq SBV.false a x y
-        in SBV.ite (fromVBit c) x y
+        SBV.ite (ngt (cmp x y)) x y
 
     ECMax         -> -- {a} (Cmp a) => a -> a -> a
       -- max x y = if y <= x then x else y
       binary $ \a x y ->
-        let c = cmpBinary cmpLtEq cmpLtEq SBV.false a y x
-        in SBV.ite (fromVBit c) x y
+        SBV.ite (ngt (cmp y x)) x y
 
     ECAnd         -> binary (logicBinary (SBV.&&&) (.&.))
     ECOr          -> binary (logicBinary (SBV.|||) (.|.))
@@ -393,54 +384,6 @@ sLg2 x = go 0
     lit n = SBV.literal (bv (bitSize x) n)
     go i | i < bitSize x = SBV.ite ((SBV..<=) x (lit (2^i))) (lit (toInteger i)) (go (i + 1))
          | otherwise     = lit (toInteger i)
-
--- Cmp -------------------------------------------------------------------------
-
-cmpValue :: (SBool -> SBool -> a -> a)
-         -> (SWord -> SWord -> a -> a)
-         -> (Value -> Value -> a -> a)
-cmpValue fb fw = cmp
-  where
-    cmp v1 v2 k =
-      case (v1, v2) of
-        (VRecord fs1, VRecord fs2) -> cmpValues (map snd fs1) (map snd fs2) k
-        (VTuple vs1 , VTuple vs2 ) -> cmpValues vs1 vs2 k
-        (VBit b1    , VBit b2    ) -> fb b1 b2 k
-        (VWord w1   , VWord w2   ) -> fw w1 w2 k
-        (VSeq _ vs1 , VSeq _ vs2 ) -> cmpValues vs1 vs2 k
-        (VStream {} , VStream {} ) -> panic "Cryptol.Symbolic.Prims.cmpValue"
-                                        [ "Infinite streams are not comparable" ]
-        (VFun {}    , VFun {}    ) -> panic "Cryptol.Symbolic.Prims.cmpValue"
-                                        [ "Functions are not comparable" ]
-        (VPoly {}   , VPoly {}   ) -> panic "Cryptol.Symbolic.Prims.cmpValue"
-                                        [ "Polymorphic values are not comparable" ]
-        (VWord w1   , _          ) -> fw w1 (fromVWord v2) k
-        (_          , VWord w2   ) -> fw (fromVWord v1) w2 k
-        (_          , _          ) -> panic "Cryptol.Symbolic.Prims.cmpValue"
-                                        [ "type mismatch" ]
-
-    cmpValues (x1 : xs1) (x2 : xs2) k = cmp x1 x2 (cmpValues xs1 xs2 k)
-    cmpValues _ _ k = k
-
-cmpEq :: SBV.EqSymbolic a => a -> a -> SBool -> SBool
-cmpEq x y k = (SBV.&&&) ((SBV..==) x y) k
-
-cmpNotEq :: SBV.EqSymbolic a => a -> a -> SBool -> SBool
-cmpNotEq x y k = (SBV.|||) ((SBV../=) x y) k
-
-cmpLt, cmpGt :: SBV.OrdSymbolic a => a -> a -> SBool -> SBool
-cmpLt x y k = (SBV.|||) ((SBV..<) x y) (cmpEq x y k)
-cmpGt x y k = (SBV.|||) ((SBV..>) x y) (cmpEq x y k)
-
-cmpLtEq, cmpGtEq :: SBV.OrdSymbolic a => a -> a -> SBool -> SBool
-cmpLtEq x y k = (SBV.&&&) ((SBV..<=) x y) (cmpNotEq x y k)
-cmpGtEq x y k = (SBV.&&&) ((SBV..>=) x y) (cmpNotEq x y k)
-
-cmpBinary :: (SBool -> SBool -> SBool -> SBool)
-          -> (SWord -> SWord -> SBool -> SBool)
-          -> SBool -> Binary
-cmpBinary fb fw b _ty v1 v2 = VBit (cmpValue fb fw v1 v2 b)
-
 
 -- Logic -----------------------------------------------------------------------
 

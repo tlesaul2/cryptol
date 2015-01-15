@@ -64,6 +64,8 @@ library
                        Cryptol.Parser.Utils,
                        Cryptol.Parser.Unlit,
 
+                       Cryptol.Utils.Compare,
+                       Cryptol.Utils.Compare.Class,
                        Cryptol.Utils.PP,
                        Cryptol.Utils.Panic,
                        Cryptol.Utils.Debug,

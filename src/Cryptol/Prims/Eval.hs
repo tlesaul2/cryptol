@@ -7,6 +7,7 @@
 -- Portability :  portable
 
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE Rank2Types #-}
@@ -25,10 +26,10 @@ import Cryptol.Eval.Error
 import Cryptol.Eval.Type(evalTF)
 import Cryptol.Eval.Value
 import Cryptol.Testing.Random (randomValue)
+import Cryptol.Utils.Compare
 import Cryptol.Utils.Panic (panic)
 
-import Data.List (sortBy,transpose,genericTake,genericReplicate,genericSplitAt,genericIndex)
-import Data.Ord (comparing)
+import Data.List (transpose,genericTake,genericReplicate,genericSplitAt,genericIndex)
 import Data.Bits (Bits(..))
 
 import System.Random.TF (mkTFGen)
@@ -93,12 +94,12 @@ evalECon ec = case ec of
   ECExp         -> binary (arithBinary (liftBinBV    modExp))
   ECLg2         -> unary  (arithUnary  (liftUnArith  lg2))
   ECNeg         -> unary  (arithUnary  (liftUnArith  negate))
-  ECLt          -> binary (cmpOrder (\o -> o == LT           ))
-  ECGt          -> binary (cmpOrder (\o -> o == GT           ))
-  ECLtEq        -> binary (cmpOrder (\o -> o == LT || o == EQ))
-  ECGtEq        -> binary (cmpOrder (\o -> o == GT || o == EQ))
-  ECEq          -> binary (cmpOrder (\o ->            o == EQ))
-  ECNotEq       -> binary (cmpOrder (\o ->            o /= EQ))
+  ECLt          -> binary (cmpOrder lt )
+  ECGt          -> binary (cmpOrder gt )
+  ECLtEq        -> binary (cmpOrder ngt)
+  ECGtEq        -> binary (cmpOrder nlt)
+  ECEq          -> binary (cmpOrder eq )
+  ECNotEq       -> binary (cmpOrder neq)
   ECMin         -> binary (withOrder minV)
   ECMax         -> binary (withOrder maxV)
   ECAnd         -> binary (logicBinary (.&.))
@@ -123,8 +124,8 @@ evalECon ec = case ec of
   ECAtBack      -> indexPrimOne  indexBack
   ECAtRangeBack -> indexPrimMany indexBackRange
 
-  ECFunEq    -> funCmp (== EQ)
-  ECFunNotEq -> funCmp (/= EQ)
+  ECFunEq    -> funCmp eq
+  ECFunNotEq -> funCmp neq
 
   ECZero        -> tlam zeroV
 
@@ -367,48 +368,12 @@ modWrap x y = x `mod` y
 
 -- Cmp -------------------------------------------------------------------------
 
--- | Lexicographic ordering on two values.
-lexCompare :: TValue -> Value -> Value -> Ordering
-lexCompare ty l r
-
-  | isTBit ty =
-    compare (fromVBit l) (fromVBit r)
-
-  | Just (_,b) <- isTSeq ty, isTBit b =
-    compare (fromWord l) (fromWord r)
-
-  | Just (_,e) <- isTSeq ty =
-    zipLexCompare (repeat e) (fromSeq l) (fromSeq r)
-
-  -- tuples
-  | Just (_,etys) <- isTTuple ty =
-    zipLexCompare etys (fromVTuple l) (fromVTuple r)
-
-  -- records
-  | Just fields <- isTRec ty =
-    let tys    = map snd (sortBy (comparing fst) fields)
-        ls     = map snd (sortBy (comparing fst) (fromVRecord l))
-        rs     = map snd (sortBy (comparing fst) (fromVRecord r))
-     in zipLexCompare tys ls rs
-
-  | otherwise = evalPanic "lexCompare" ["invalid type"]
-
-
--- XXX the lists are expected to be of the same length, as this should only be
--- used with values that come from type-correct expressions.
-zipLexCompare :: [TValue] -> [Value] -> [Value] -> Ordering
-zipLexCompare tys ls rs = foldr choose EQ (zipWith3 lexCompare tys ls rs)
-  where
-  choose c acc = case c of
-    EQ -> acc
-    _  -> c
-
--- | Process two elements based on their lexicographic ordering.
-cmpOrder :: (Ordering -> Bool) -> Binary
-cmpOrder op ty l r = VBit (op (lexCompare ty l r))
+cmpOrder :: Comparable (GenValue b w) o
+         => (o -> b) -> TValue -> GenValue b w -> GenValue b w -> GenValue b w
+cmpOrder op _ty l r = VBit (op (cmp l r))
 
 withOrder :: (Ordering -> TValue -> Value -> Value -> Value) -> Binary
-withOrder choose ty l r = choose (lexCompare ty l r) ty l r
+withOrder choose ty l r = choose (cmp l r) ty l r
 
 maxV :: Ordering -> TValue -> Value -> Value -> Value
 maxV o _ l r = case o of
@@ -421,7 +386,7 @@ minV o _ l r = case o of
   _  -> l
 
 
-funCmp :: (Ordering -> Bool) -> Value
+funCmp :: Comparable (GenValue b w) o => (o -> b) -> GenValue b w
 funCmp op =
   tlam $ \ _a ->
   tlam $ \  b ->

@@ -11,6 +11,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Cryptol.Eval.Value where
 
@@ -19,11 +20,14 @@ import Cryptol.Eval.Error
 import Cryptol.Prims.Syntax (ECon(..))
 import Cryptol.TypeCheck.AST
 import Cryptol.TypeCheck.Solver.InfNat(Nat'(..))
+import Cryptol.Utils.Compare.Class
 import Cryptol.Utils.PP
 import Cryptol.Utils.Panic(panic)
 
 import Control.Monad (guard, zipWithM)
-import Data.List(genericTake)
+import Data.List(genericTake, sortBy)
+import Data.Monoid (Monoid(..))
+import Data.Ord (comparing)
 import Data.Bits (setBit,testBit,(.&.),shiftL)
 import Numeric (showIntAtBase)
 
@@ -79,6 +83,9 @@ finTValue tval =
 data BV = BV !Integer !Integer -- ^ width, value
                                -- The value may contain junk bits
 
+instance Comparable BV Ordering where
+  cmp v1 v2 = cmpOrd (fromBV v1) (fromBV v2)
+
 -- | Smart constructor for 'BV's that checks for the width limit
 mkBv :: Integer -> Integer -> BV
 mkBv w i | w >= Arch.maxBigIntWidth = wordTooWide w
@@ -98,6 +105,29 @@ data GenValue b w
   | VPoly (TValue -> GenValue b w)      -- polymorphic values (kind *)
 
 type Value = GenValue Bool BV
+
+instance (Comparable b ord, Comparable w ord, BitWord b w, Monoid ord) => Comparable (GenValue b w) ord where
+  cmp v1 v2 = cmpCPS v1 v2 mempty where
+    cmpCPS v1 v2 k = case (v1, v2) of
+      (VRecord fs1, VRecord fs2) -> cmpList (vals fs1) (vals fs2) k
+      (VTuple vs1 , VTuple vs2 ) -> cmpList vs1 vs2 k
+      (VBit b1    , VBit b2    ) -> cmp b1 b2 `mappend` k
+      (VWord w1   , VWord w2   ) -> cmp w1 w2 `mappend` k
+      (VSeq _ vs1 , VSeq _ vs2 ) -> cmpList vs1 vs2 k
+      (VStream {} , VStream {} ) -> panic "Cryptol.Eval.Value.cmp"
+                                      [ "Infinite streams are not comparable" ]
+      (VFun {}    , VFun {}    ) -> panic "Cryptol.Eval.Value.cmp"
+                                      [ "Functions are not comparable" ]
+      (VPoly {}   , VPoly {}   ) -> panic "Cryptol.Eval.Value.cmp"
+                                      [ "Polymorphic values are not comparable" ]
+      (VWord w1   , _          ) -> cmp w1 (fromVWord v2) `mappend` k
+      (_          , VWord w2   ) -> cmp (fromVWord v1) w2 `mappend` k
+      (_          , _          ) -> panic "Cryptol.Eval.Value.cmp"
+                                      [ "type mismatch" ]
+
+    vals = map snd . sortBy (comparing fst)
+    cmpList (x1 : xs1) (x2 : xs2) k = cmpCPS x1 x2 (cmpList xs1 xs2 k)
+    cmpList _ _ k = k
 
 -- | An evaluated type.
 -- These types do not contain type variables, type synonyms, or type functions.

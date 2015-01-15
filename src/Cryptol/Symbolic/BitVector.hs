@@ -22,6 +22,7 @@ import Data.SBV.Bridge.Yices
 import Data.SBV.Internals
 import Data.SBV.BitVectors.Data
 
+import Cryptol.Utils.Compare
 import Cryptol.Utils.Panic
 
 -- BitVector type --------------------------------------------------------------
@@ -139,6 +140,9 @@ instance SDivisible BitVector where
 instance SDivisible (SBV BitVector) where
   sQuotRem = liftQRem
   sDivMod  = liftDMod
+
+instance Comparable SWord OrderingSymbolic where
+  cmp = cmpOrdSymbolic
 
 extract :: Int -> Int -> SWord -> SWord
 extract i j x@(SBV (KBounded s _) _) =
