@@ -5,6 +5,7 @@
 -- Maintainer  :  cryptol@galois.com
 -- Stability   :  provisional
 -- Portability :  portable
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE Safe #-}
 
@@ -33,3 +34,12 @@ instance Comparison Ordering Bool where
   nlt = (/=LT)
   neq = (/=EQ)
   ngt = (/=GT)
+
+-- | A generalization of SBV's if-then-else construct.
+class Conditional c a where
+  -- | If @c@ is truthy, then @cond c x y@ should return @x@, otherwise @y@.
+  cond :: c -> a -> a -> a
+
+instance Conditional Bool a where
+  cond False t f = f
+  cond True  t f = t

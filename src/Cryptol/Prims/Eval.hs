@@ -100,8 +100,8 @@ evalECon ec = case ec of
   ECGtEq        -> binary (cmpOrder nlt)
   ECEq          -> binary (cmpOrder eq )
   ECNotEq       -> binary (cmpOrder neq)
-  ECMin         -> binary (withOrder minV)
-  ECMax         -> binary (withOrder maxV)
+  ECMin         -> binary (withOrder ngt)
+  ECMax         -> binary (withOrder nlt)
   ECAnd         -> binary (logicBinary (.&.))
   ECOr          -> binary (logicBinary (.|.))
   ECXor         -> binary (logicBinary xor)
@@ -372,19 +372,9 @@ cmpOrder :: Comparable (GenValue b w) o
          => (o -> b) -> TValue -> GenValue b w -> GenValue b w -> GenValue b w
 cmpOrder op _ty l r = VBit (op (cmp l r))
 
-withOrder :: (Ordering -> TValue -> Value -> Value -> Value) -> Binary
-withOrder choose ty l r = choose (cmp l r) ty l r
-
-maxV :: Ordering -> TValue -> Value -> Value -> Value
-maxV o _ l r = case o of
-  LT -> r
-  _  -> l
-
-minV :: Ordering -> TValue -> Value -> Value -> Value
-minV o _ l r = case o of
-  GT -> r
-  _  -> l
-
+withOrder :: (Comparable (GenValue b w) o, Conditional b (GenValue b w))
+          => (o -> b) -> TValue -> GenValue b w -> GenValue b w -> GenValue b w
+withOrder op _ty l r = cond (op (cmp l r)) l r
 
 funCmp :: Comparable (GenValue b w) o => (o -> b) -> GenValue b w
 funCmp op =

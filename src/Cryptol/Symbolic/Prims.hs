@@ -60,23 +60,10 @@ evalECon econ =
     ECNotEq       -> binary (Eval.cmpOrder neq)
 
     -- FIXME: the next 4 "primitives" should be defined in the Cryptol prelude.
-    ECFunEq       -> -- {a b} (Cmp b) => (a -> b) -> (a -> b) -> a -> Bit
-      -- (f === g) x = (f x == g x)
-      Eval.funCmp eq
-
-    ECFunNotEq    -> -- {a b} (Cmp b) => (a -> b) -> (a -> b) -> a -> Bit
-      -- (f !== g) x = (f x != g x)
-      Eval.funCmp neq
-
-    ECMin         -> -- {a} (Cmp a) => a -> a -> a
-      -- min x y = if x <= y then x else y
-      binary $ \a x y ->
-        SBV.ite (ngt (cmp x y)) x y
-
-    ECMax         -> -- {a} (Cmp a) => a -> a -> a
-      -- max x y = if y <= x then x else y
-      binary $ \a x y ->
-        SBV.ite (ngt (cmp y x)) x y
+    ECFunEq       -> Eval.funCmp eq
+    ECFunNotEq    -> Eval.funCmp neq
+    ECMin         -> binary (Eval.withOrder ngt)
+    ECMax         -> binary (Eval.withOrder nlt)
 
     ECAnd         -> binary (logicBinary (SBV.&&&) (.&.))
     ECOr          -> binary (logicBinary (SBV.|||) (.|.))

@@ -13,6 +13,7 @@ module Cryptol.Utils.Compare
     Comparable(..)
   , cmpOrd, cmpOrdSymbolic
   , Comparison(..)
+  , Conditional(..)
   , OrderingSymbolic
   ) where
 
@@ -57,6 +58,9 @@ instance Comparison OrderingSymbolic SBool where
   nlt   = bnot . isLT
   neq   = isNEQ
   ngt   = isNGT
+
+instance Mergeable a => Conditional SBool a where
+  cond = ite
 
 -- TODO: Just go ahead and track all six conditions, so there's no need for the
 -- comment about lt/gt and nlt/ngt.
