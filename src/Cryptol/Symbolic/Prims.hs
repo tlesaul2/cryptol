@@ -332,15 +332,8 @@ takeV n xs =
 -- | Make a numeric constant.
 -- { val, bits } (fin val, fin bits, bits >= width val) => [bits]
 ecDemoteV :: Value
-ecDemoteV = tlam $ \valT ->
-            tlam $ \bitT ->
-            case (numTValue valT, numTValue bitT) of
-              (Nat v, Nat bs) -> VWord (SBV.literal (bv (fromInteger bs) v))
-              _ -> evalPanic "Cryptol.Prove.evalECon"
-                       ["Unexpected Inf in constant."
-                       , show valT
-                       , show bitT
-                       ]
+ecDemoteV = Eval.ecDemoteGeneric "Cryptol.Symbolic.ecDemoteV"
+  (\bs v -> SBV.literal (bv (fromInteger bs) v))
 
 -- Arith -----------------------------------------------------------------------
 

@@ -204,18 +204,24 @@ evalECon ec = case ec of
     tlam $ \a ->
      lam $ \(fromWord -> x) -> randomV a x
 
-
 -- | Make a numeric constant.
-ecDemoteV :: Value
-ecDemoteV = tlam $ \valT ->
+ecDemoteGeneric :: String                    -- ^ A location to report when panicking.
+                -> (Integer -> Integer -> w) -- ^ How to build a word out of a bit-width and value.
+                -> GenValue b w
+ecDemoteGeneric loc mkWord =
+            tlam $ \valT ->
             tlam $ \bitT ->
             case (numTValue valT, numTValue bitT) of
-              (Nat v, Nat bs) -> VWord (mkBv bs v)
-              _ -> evalPanic "Cryptol.Eval.Prim.evalConst"
+              (Nat v, Nat bs) -> VWord (mkWord bs v)
+              _ -> evalPanic loc
                        ["Unexpected Inf in constant."
                        , show valT
                        , show bitT
                        ]
+
+-- | Make a numeric constant 'Value'.
+ecDemoteV :: Value
+ecDemoteV = ecDemoteGeneric "Cryptol.Prims.Eval.ecDemoteV" mkBv
 
 --------------------------------------------------------------------------------
 divModPoly :: Integer -> Int -> Integer -> Int -> (Integer, Integer)
