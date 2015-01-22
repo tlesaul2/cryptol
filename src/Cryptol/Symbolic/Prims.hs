@@ -15,12 +15,13 @@ import Control.Applicative
 import Data.Bits
 import Data.List (genericDrop, genericReplicate, genericSplitAt, genericTake, transpose)
 
+import Cryptol.Eval.Type (evalTF)
 import Cryptol.Eval.Value (TypeVal(..), toTypeVal)
 import Cryptol.Prims.Eval (binary, unary, tlamN)
 import Cryptol.Prims.Syntax (ECon(..))
 import Cryptol.Symbolic.BitVector
 import Cryptol.Symbolic.Value
-import Cryptol.TypeCheck.AST (Name)
+import Cryptol.TypeCheck.AST (Name, TFun(..))
 import Cryptol.TypeCheck.Solver.InfNat(Nat'(..), nMul)
 import Cryptol.Utils.Compare
 import Cryptol.Utils.Panic
@@ -134,11 +135,11 @@ evalECon econ =
                 where k = (- i) `mod` finTValue m
 
     ECCat         -> -- {a,b,d} (fin a) => [a] d -> [b] d -> [a + b] d
-      tlam $ \_ ->
-      tlam $ \_ ->
+      tlam $ \a ->
+      tlam $ \b ->
       tlam $ \_ ->
       VFun $ \v1 ->
-      VFun $ \v2 -> catV v1 v2
+      VFun $ \v2 -> catVLen (numTValue (evalTF TCAdd [a,b])) v1 v2
 
     ECSplitAt     -> -- {a,b,c} (fin a) => [a+b] c -> ([a]c,[b]c)
       tlam $ \(finTValue -> a) ->
@@ -302,6 +303,15 @@ mapV isBit f v =
     VSeq _ xs  -> VSeq isBit (map f xs)
     VStream xs -> VStream (map f xs)
     _          -> panic "Cryptol.Symbolic.Prims.mapV" [ "non-mappable value" ]
+
+-- This version of catV has carefully crafted laziness properties to allow for
+-- recursive declarations and to avoid extraneous bit blasting. See especially
+-- tests/issues/{issue128,issue130,issue289}.*.
+catVLen :: Nat' -> Value -> Value -> Value
+catVLen Inf       xs          ys  = VStream (fromSeq   xs  ++   fromSeq   ys)
+catVLen _ (VSeq b xs) (VSeq _ ys) = VSeq b  (          xs  ++             ys)
+catVLen _         xs          ys  = VWord   (fromVWord xs `cat` fromVWord ys)
+catVLen _ _ _ = panic "Cryptol.Symbolic.Prims.catVLen" [ "non-concatenable types" ]
 
 catV :: Value -> Value -> Value
 catV xs          (VStream ys) = VStream (fromSeq xs ++ ys)
