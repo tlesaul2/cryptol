@@ -705,10 +705,9 @@ replEvalExpr expr =
      (def1,ty) <-
         case defaultExpr range def sig of
           Nothing -> raise (EvalPolyError sig)
-          Just (tys,def1) ->
+          Just (su,def1) ->
             do let nms = T.addTNames (T.sVars sig) IntMap.empty
-               io $ mapM_ (warnDefault nms) tys
-               let su = T.listSubst [ (T.tpVar a, t) | (a,t) <- tys ]
+               io $ mapM_ (warnDefault nms) (fromMaybe [] (T.substToList su))
                return (def1, T.apSubst su (T.sType sig))
 
      val <- liftModuleCmd (M.evalExpr def1)

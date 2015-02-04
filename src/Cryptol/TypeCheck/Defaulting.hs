@@ -164,14 +164,14 @@ tryDefaultWith ordM0 as ps =
 -- | Try to pick a reasonable instantiation for an expression, with
 -- the given type.  This is useful when we do evaluation at the REPL.
 -- The resaulting types should satisfy the constraints of the schema.
-defaultExpr :: Range -> Expr -> Schema -> Maybe ([(TParam,Type)], Expr)
+defaultExpr :: Range -> Expr -> Schema -> Maybe (Subst, Expr)
 defaultExpr r e s =
-  do let vs = sVars s
+  do let vs = map tpVar (sVars s)
      guard $ all (\v -> kindOf v == KNum) vs  -- only defautl numerics.
      ps <- simplify [] $ map toGoal $ sProps s
      soln <- go [] vs ps
      tys  <- mapM (`lookup` soln) vs
-     return (soln, foldl (\e1 _ -> EProofApp e1) (foldl ETApp e tys) (sProps s))
+     return (listSubst soln, foldl (\e1 _ -> EProofApp e1) (foldl ETApp e tys) (sProps s))
 
   where
   candidate :: Goal -> Maybe (TVar,Integer)
@@ -185,7 +185,7 @@ defaultExpr r e s =
   go _    [] _  = Nothing
 
   go done as@(tp0:_) ps =
-    do let (a,n) = fromMaybe (tpVar tp0, 0) $ msum (map candidate ps)
+    do let (a,n) = fromMaybe (tp0, 0) $ msum (map candidate ps)
        -- If no candidate works, we try to set the variable to 0
        -- This handles a case when all we have letft are fin constraints.
 
@@ -197,7 +197,7 @@ defaultExpr r e s =
 
   getParam _ [] = Nothing
   getParam v (tp : tps)
-    | tpVar tp == v = Just (tp,tps)
+    | tp == v       = Just (tp,tps)
     | otherwise     = do (a,more) <- getParam v tps
                          return (a,tp:more)
 
