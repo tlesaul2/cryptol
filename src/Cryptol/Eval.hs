@@ -43,7 +43,7 @@ data ExprOperations e b w = ExprOperations
   , eoBindTerm   :: QName -> GenValue b w -> e -> e
   , eoBindType   :: TVar  -> TValue       -> e -> e
   , eoLookupTerm :: QName -> e -> GenValue b w
-  -- TODO: should this be eoLookupType :: e -> TVar -> TValue?
+  -- TODO: should this be eoLookupType :: TVar -> e -> TValue?
   , eoEvalType   :: e -> Type -> TValue
   , eoListSel    :: Int -> GenValue b w -> GenValue b w
   , eoIf         :: b -> GenValue b w -> GenValue b w -> GenValue b w

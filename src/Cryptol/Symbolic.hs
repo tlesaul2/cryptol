@@ -314,6 +314,7 @@ lookupType :: TVar -> Env -> Maybe TValue
 lookupType p env = Map.lookup p (envTypes env)
 
 -- | Select the value at a given index of a sequence.
+index :: Int -> Value -> Value
 index n (VWord s) = VBit (SBV.sbvTestBit s n)
 index n v         = fromSeq v !! n
 
