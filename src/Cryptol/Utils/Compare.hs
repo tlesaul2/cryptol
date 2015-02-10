@@ -44,8 +44,11 @@ import Data.SBV
 -- To that end, we export separate classes for doing comparison traversals and
 -- for turning traversals into boolean-like values.
 
-instance Comparable SBool OrderingSymbolic where
-  cmp = cmpOrdSymbolic
+instance Comparable SBool   OrderingSymbolic where cmp = cmpOrdSymbolic
+instance Comparable SWord8  OrderingSymbolic where cmp = cmpOrdSymbolic
+instance Comparable SWord16 OrderingSymbolic where cmp = cmpOrdSymbolic
+instance Comparable SWord32 OrderingSymbolic where cmp = cmpOrdSymbolic
+instance Comparable SWord64 OrderingSymbolic where cmp = cmpOrdSymbolic
 
 -- | A default implementation of 'cmp' for 'OrdSymbolic' instances.
 cmpOrdSymbolic :: OrdSymbolic a => a -> a -> OrderingSymbolic

@@ -37,7 +37,7 @@ type Value = GenValue SBool SWord
 
 -- Symbolic Conditionals -------------------------------------------------------
 
-instance Mergeable Value where
+instance (BitWord b w, Mergeable b, Mergeable w) => Mergeable (GenValue b w) where
   symbolicMerge f c v1 v2 =
     case (v1, v2) of
       (VRecord fs1, VRecord fs2) -> VRecord $ zipWith mergeField fs1 fs2
