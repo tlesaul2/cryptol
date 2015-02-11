@@ -439,24 +439,3 @@ supplyArgs :: Expr -> Type -> SBVCodeGen ()
 supplyArgs = go . evalExpr mempty where
   go (VWord (CWord8 w)) (PWord 8) = cgOutput "out" w
   go (VFun f) (PWord 8 :-> t) = cgInput "in" >>= \w -> go (f (VWord (CWord8 w))) t
-
-{-
-codeGenImpl :: [(T.TParam, T.Type)] -> T.Expr -> T.Schema -> SBVCodeGen ()
-codeGenImpl tyEnv expr (T.Forall [] [] ty) =
-  supplyArgs v initTy >>= genOutput
-  where
-  initTy  = tValTy (evalType initEnv ty)
-  initEnv = foldr (\(tp, ty) -> bindType (tparamToTVar tp) (TValue ty))
-                  emptyEnv
-                  tyEnv
-  tparamToTVar tp = T.TVBound (T.tpUnique tp) (T.tpKind tp)
-  v = evalExpr initEnv expr
-
-  supplyArgs :: CodeGenValue -> T.Type -> SBVCodeGen CodeGenValue
-  supplyArgs (CGFun f) (tyIn :-> tyOut) = case tyIn of
-    Word8 -> cgInputWord8 >>= \v -> supplyArgs (f v) tyOut
-    _ -> error "dunno how to make something of that type"
-  supplyArgs v ty = return v
-
-  genOutput (CGWord8 w) = cgOutput "out" w
--}
