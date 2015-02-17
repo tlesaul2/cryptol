@@ -53,7 +53,7 @@ else
 endif
 
 CRYPTOL_EXE := ./dist/build/cryptol/cryptol${EXE_EXT}
-CRYPTOLGEN_EXE := ./dist/build/Cryptol/cryptol${EXE_EXT}
+CRYPTOLGEN_EXE := ./dist/build/cryptolgen/cryptol${EXE_EXT}
 
 .PHONY: all
 all: ${CRYPTOL_EXE}
