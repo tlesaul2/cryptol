@@ -13,7 +13,8 @@ module Cryptol.Symbolic.Prims where
 
 import Control.Applicative
 import Data.Bits
-import Data.List (genericDrop, genericReplicate, genericSplitAt, genericTake, transpose)
+import Data.List (genericDrop, genericReplicate, genericSplitAt, genericTake, sortBy, transpose)
+import Data.Ord (comparing)
 
 import Cryptol.Eval.Type (evalTF)
 import Cryptol.Eval.Value (TypeVal(..), toTypeVal)
@@ -28,7 +29,6 @@ import Cryptol.Utils.Panic
 
 import qualified Data.SBV as SBV
 import Data.SBV (SBool)
-import qualified Data.SBV.Tools.Polynomial as Poly
 import qualified Cryptol.Prims.Eval as Eval
 
 traverseSnd :: Functor f => (a -> f b) -> (t, a) -> f (t, b)
@@ -237,7 +237,7 @@ evalECon econ =
       VFun $ \v2 ->
         let k = max 1 (i + j) - 1
             mul _  []     ps = ps
-            mul as (b:bs) ps = mul (SBV.false : as) bs (Poly.ites b (as `Poly.addPoly` ps) ps)
+            mul as (b:bs) ps = mul (SBV.false : as) bs (ites b (as `addPoly` ps) ps)
             xs = map fromVBit (fromSeq v1)
             ys = map fromVBit (fromSeq v2)
             zs = take (fromInteger k) (mul xs ys [] ++ repeat SBV.false)
@@ -250,7 +250,7 @@ evalECon econ =
       VFun $ \v2 ->
         let xs = map fromVBit (fromSeq v1)
             ys = map fromVBit (fromSeq v2)
-            zs = take (fromInteger i) (fst (Poly.mdp (reverse xs) (reverse ys)) ++ repeat SBV.false)
+            zs = take (fromInteger i) (fst (mdp (reverse xs) (reverse ys)) ++ repeat SBV.false)
         in VSeq True (map VBit (reverse zs))
 
     ECPMod        -> -- {a,b} (fin a, fin b) => [a] -> [b+1] -> [b]
@@ -260,7 +260,7 @@ evalECon econ =
       VFun $ \v2 ->
         let xs = map fromVBit (fromSeq v1)
             ys = map fromVBit (fromSeq v2)
-            zs = take (fromInteger j) (snd (Poly.mdp (reverse xs) (reverse ys)) ++ repeat SBV.false)
+            zs = take (fromInteger j) (snd (mdp (reverse xs) (reverse ys)) ++ repeat SBV.false)
         in VSeq True (map VBit (reverse zs))
 
     ECRandom      -> panic "Cryptol.Symbolic.Prims.evalECon"
@@ -375,6 +375,55 @@ sLg2 x = go 0
     go i | i < bitSize x = SBV.ite ((SBV..<=) x (lit (2^i))) (lit (toInteger i)) (go (i + 1))
          | otherwise     = lit (toInteger i)
 
+-- Cmp -------------------------------------------------------------------------
+
+cmpValue :: (SBool -> SBool -> a -> a)
+         -> (SWord -> SWord -> a -> a)
+         -> (Value -> Value -> a -> a)
+cmpValue fb fw = cmp
+  where
+    cmp v1 v2 k =
+      case (v1, v2) of
+        (VRecord fs1, VRecord fs2) -> let vals = map snd . sortBy (comparing fst)
+                                      in  cmpValues (vals fs1) (vals fs2) k
+        (VTuple vs1 , VTuple vs2 ) -> cmpValues vs1 vs2 k
+        (VBit b1    , VBit b2    ) -> fb b1 b2 k
+        (VWord w1   , VWord w2   ) -> fw w1 w2 k
+        (VSeq _ vs1 , VSeq _ vs2 ) -> cmpValues vs1 vs2 k
+        (VStream {} , VStream {} ) -> panic "Cryptol.Symbolic.Prims.cmpValue"
+                                        [ "Infinite streams are not comparable" ]
+        (VFun {}    , VFun {}    ) -> panic "Cryptol.Symbolic.Prims.cmpValue"
+                                        [ "Functions are not comparable" ]
+        (VPoly {}   , VPoly {}   ) -> panic "Cryptol.Symbolic.Prims.cmpValue"
+                                        [ "Polymorphic values are not comparable" ]
+        (VWord w1   , _          ) -> fw w1 (fromVWord v2) k
+        (_          , VWord w2   ) -> fw (fromVWord v1) w2 k
+        (_          , _          ) -> panic "Cryptol.Symbolic.Prims.cmpValue"
+                                        [ "type mismatch" ]
+
+    cmpValues (x1 : xs1) (x2 : xs2) k = cmp x1 x2 (cmpValues xs1 xs2 k)
+    cmpValues _ _ k = k
+
+cmpEq :: SBV.EqSymbolic a => a -> a -> SBool -> SBool
+cmpEq x y k = (SBV.&&&) ((SBV..==) x y) k
+
+cmpNotEq :: SBV.EqSymbolic a => a -> a -> SBool -> SBool
+cmpNotEq x y k = (SBV.|||) ((SBV../=) x y) k
+
+cmpLt, cmpGt :: SBV.OrdSymbolic a => a -> a -> SBool -> SBool
+cmpLt x y k = (SBV.|||) ((SBV..<) x y) (cmpEq x y k)
+cmpGt x y k = (SBV.|||) ((SBV..>) x y) (cmpEq x y k)
+
+cmpLtEq, cmpGtEq :: SBV.OrdSymbolic a => a -> a -> SBool -> SBool
+cmpLtEq x y k = (SBV.&&&) ((SBV..<=) x y) (cmpNotEq x y k)
+cmpGtEq x y k = (SBV.&&&) ((SBV..>=) x y) (cmpNotEq x y k)
+
+cmpBinary :: (SBool -> SBool -> SBool -> SBool)
+          -> (SWord -> SWord -> SBool -> SBool)
+          -> SBool -> Binary
+cmpBinary fb fw b _ty v1 v2 = VBit (cmpValue fb fw v1 v2 b)
+
+
 -- Logic -----------------------------------------------------------------------
 
 errorV :: String -> TValue -> Value
@@ -485,3 +534,61 @@ fromThenToV  =
          in VSeq False (genericTake len' (map lit nums))
 
       _ -> evalPanic "fromThenV" ["invalid arguments"]
+
+-- Polynomials -----------------------------------------------------------------
+
+-- TODO: Data.SBV.BitVectors.Polynomials should export ites, addPoly,
+-- and mdp (the following definitions are copied from that module)
+
+-- | Add two polynomials
+addPoly :: [SBool] -> [SBool] -> [SBool]
+addPoly xs    []      = xs
+addPoly []    ys      = ys
+addPoly (x:xs) (y:ys) = x SBV.<+> y : addPoly xs ys
+
+ites :: SBool -> [SBool] -> [SBool] -> [SBool]
+ites s xs ys
+ | Just t <- SBV.unliteral s
+ = if t then xs else ys
+ | True
+ = go xs ys
+ where go [] []         = []
+       go []     (b:bs) = SBV.ite s SBV.false b : go [] bs
+       go (a:as) []     = SBV.ite s a SBV.false : go as []
+       go (a:as) (b:bs) = SBV.ite s a b : go as bs
+
+-- conservative over-approximation of the degree
+degree :: [SBool] -> Int
+degree xs = walk (length xs - 1) $ reverse xs
+  where walk n []     = n
+        walk n (b:bs)
+         | Just t <- SBV.unliteral b
+         = if t then n else walk (n-1) bs
+         | True
+         = n -- over-estimate
+
+mdp :: [SBool] -> [SBool] -> ([SBool], [SBool])
+mdp xs ys = go (length ys - 1) (reverse ys)
+  where degTop  = degree xs
+        go _ []     = error "SBV.Polynomial.mdp: Impossible happened; exhausted ys before hitting 0"
+        go n (b:bs)
+         | n == 0   = (reverse qs, rs)
+         | True     = let (rqs, rrs) = go (n-1) bs
+                      in (ites b (reverse qs) rqs, ites b rs rrs)
+         where degQuot = degTop - n
+               ys' = replicate degQuot SBV.false ++ ys
+               (qs, rs) = divx (degQuot+1) degTop xs ys'
+
+-- return the element at index i; if not enough elements, return false
+-- N.B. equivalent to '(xs ++ repeat false) !! i', but more efficient
+idx :: [SBool] -> Int -> SBool
+idx []     _ = SBV.false
+idx (x:_)  0 = x
+idx (_:xs) i = idx xs (i-1)
+
+divx :: Int -> Int -> [SBool] -> [SBool] -> ([SBool], [SBool])
+divx n _ xs _ | n <= 0 = ([], xs)
+divx n i xs ys'        = (q:qs, rs)
+  where q        = xs `idx` i
+        xs'      = ites q (xs `addPoly` ys') xs
+        (qs, rs) = divx (n-1) (i-1) xs' (tail ys')

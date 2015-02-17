@@ -31,6 +31,8 @@ import Cryptol.Prims.Eval (BinOp, UnOp)
 import Cryptol.Prims.Syntax
 import Cryptol.Symbolic.Value () -- for its instance Mergeable (GenValue b w)
 import Cryptol.TypeCheck.AST
+           (ModName(..), QName(..), Name(..), TVar, Expr, Type(..), Schema(..),
+            TCon(..), TC(..), Expr(..), Module(..))
 import Cryptol.TypeCheck.Defaulting (defaultExpr)
 import Cryptol.TypeCheck.Subst (apSubst)
 import Cryptol.Utils.Compare

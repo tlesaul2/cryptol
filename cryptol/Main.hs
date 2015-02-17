@@ -6,6 +6,7 @@
 -- Stability   :  provisional
 -- Portability :  portable
 
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Main where
@@ -14,25 +15,31 @@ import Options
 
 import REPL.Command (loadCmd,loadPrelude)
 import REPL.Haskeline
-import REPL.Monad (REPL,setREPLTitle,io,DotCryptol(..))
+import REPL.Monad (REPL,setREPLTitle,io,DotCryptol(..),
+                   prependSearchPath,setSearchPath)
 import REPL.Logo
 import qualified REPL.Monad as REPL
 
 import Cryptol.Utils.PP(pp)
 
+import System.Environment (lookupEnv)
+import System.FilePath (splitSearchPath)
+
 data REPLOptions = REPLOptions
-  { optLoad       :: [FilePath]
-  , optBatch      :: Maybe FilePath
-  , optDotCryptol :: DotCryptol
+  { optLoad            :: [FilePath]
+  , optBatch           :: Maybe FilePath
+  , optDotCryptol      :: DotCryptol
+  , optCryptolPathOnly :: Bool
   } deriving (Show)
 
 argParser :: ArgParser REPLOptions
 argParser = ArgParser
   { nonOptions  = ReturnInOrder addFile
   , defOptions  = defaultOptions REPLOptions
-    { optLoad       = []
-    , optBatch      = Nothing
-    , optDotCryptol = DotCDefault
+    { optLoad            = []
+    , optBatch           = Nothing
+    , optDotCryptol      = DotCDefault
+    , optCryptolPathOnly = False
     }
   , description = defaultDescription
     [ Option "b" ["batch"] (ReqArg setBatchScript "FILE")
@@ -43,6 +50,9 @@ argParser = ArgParser
 
     , Option ""  ["cryptol-script"] (ReqArg addDotC "FILE")
       "read additional .cryptol files"
+
+    , Option ""  ["cryptolpath-only"] (NoArg setCryptolPathOnly)
+      "only look for .cry files in CRYPTOLPATH; don't use built-in locations"
     ]
   , toolName = "Cryptol"
   }
@@ -69,6 +79,9 @@ addDotC path = modifyOpt $ \ opts ->
     DotCDisabled -> opts
     DotCFiles xs -> opts { optDotCryptol = DotCFiles (path:xs) }
 
+setCryptolPathOnly :: OptParser (Options REPLOptions)
+setCryptolPathOnly  = modifyOpt $ \opts -> opts { optCryptolPathOnly = True }
+
 main :: IO ()
 main  = do
   opts <- getOpts argParser
@@ -78,6 +91,17 @@ setupREPL :: REPLOptions -> REPL ()
 setupREPL opts = do
   displayLogo True
   setREPLTitle
+  mCryptolPath <- io $ lookupEnv "CRYPTOLPATH"
+  case mCryptolPath of
+    Nothing -> return ()
+    Just path | optCryptolPathOnly opts -> setSearchPath path'
+              | otherwise               -> prependSearchPath path'
+#if defined(mingw32_HOST_OS) || defined(__MINGW32__)
+      -- Windows paths search from end to beginning
+      where path' = reverse (splitSearchPath path)
+#else
+      where path' = splitSearchPath path
+#endif
   case optLoad opts of
     []  -> loadPrelude `REPL.catch` \x -> io $ print $ pp x
     [l] -> loadCmd l `REPL.catch` \x -> io $ print $ pp x

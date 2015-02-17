@@ -35,6 +35,7 @@ import REPL.Trie
 import qualified Cryptol.ModuleSystem as M
 import qualified Cryptol.ModuleSystem.Base as M (preludeName)
 import qualified Cryptol.ModuleSystem.NamingEnv as M
+import qualified Cryptol.ModuleSystem.Renamer as M (RenamerWarning(SymbolShadowed))
 
 import qualified Cryptol.Eval.Value as E
 import qualified Cryptol.Testing.Random  as TestR
@@ -52,13 +53,13 @@ import Cryptol.Utils.Panic(panic)
 import qualified Cryptol.Parser.AST as P
 import Cryptol.Prims.Doc(helpDoc)
 import qualified Cryptol.Transform.Specialize as S
-import qualified Cryptol.Symbolic
+import qualified Cryptol.Symbolic as Symbolic
 
 import qualified Control.Exception as X
 import Control.Monad (guard,unless,forM_,when)
 import Data.Char (isSpace,isPunctuation,isSymbol)
 import Data.Function (on)
-import Data.List (intercalate,isPrefixOf)
+import Data.List (intercalate,isPrefixOf,nub)
 import Data.Maybe (fromMaybe,mapMaybe)
 import Data.Monoid (mempty)
 import System.Exit (ExitCode(ExitSuccess))
@@ -364,33 +365,56 @@ onlineProveSat :: Bool
 onlineProveSat isSat str proverName mfile = do
   EnvBool iteSolver <- getUser "iteSolver"
   EnvBool verbose <- getUser "debug"
+  mSatNum <- getUserSatNum
   let cexStr | isSat = "satisfying assignment"
              | otherwise = "counterexample"
   parseExpr <- replParseExpr str
   (expr, schema) <- replCheckExpr parseExpr
   denv <- getDynEnv
   result <- liftModuleCmd $
-    Cryptol.Symbolic.satProve isSat (proverName, iteSolver, verbose)
-                                    (M.deDecls denv)
-                                    mfile
-                                    (expr, schema)
+    Symbolic.satProve
+      isSat
+      mSatNum
+      (proverName, iteSolver, verbose)
+      (M.deDecls denv)
+      mfile
+      (expr, schema)
   ppOpts <- getPPValOpts
   case result of
-    Left msg           -> io $ putStrLn msg
-    Right (Left ts)    -> do
+    Symbolic.EmptyResult         ->
+      panic "REPL.Command" [ "got EmptyResult for online prover query" ]
+    Symbolic.ProverError msg     -> io $ putStrLn msg
+    Symbolic.ThmResult ts        -> do
       io $ putStrLn (if isSat then "Unsatisfiable." else "Q.E.D.")
       let (t, e) = mkSolverResult cexStr (not isSat) (Left ts)
       bindItVariable t e
-    Right (Right tevs) -> do
-      let vs = map (\(_,_,v) -> v) tevs
-          tes = map (\(t,e,_) -> (t,e)) tevs
-          doc = ppPrec 3 parseExpr -- function application has precedence 3
-          docs = map (pp . E.WithBase ppOpts) vs
-      io $ print $ hsep (doc : docs) <+>
+    Symbolic.AllSatResult tevss -> do
+      let tess = map (map $ \(t,e,_) -> (t,e)) tevss
+          vss  = map (map $ \(_,_,v) -> v)     tevss
+          ppvs vs = do
+            let docs = map (pp . E.WithBase ppOpts) vs
+                -- function application has precedence 3
+                doc = ppPrec 3 parseExpr
+            io $ print $ hsep (doc : docs) <+>
                    text (if isSat then "= True" else "= False")
-      -- bind the counterexample to `it`
-      let (t, e) = mkSolverResult cexStr isSat (Right tes)
-      bindItVariable t e
+          resultRecs = map (mkSolverResult cexStr isSat . Right) tess
+          collectTes tes = (t, es)
+            where
+              (ts, es) = unzip tes
+              t = case nub ts of
+                    [t'] -> t'
+                    _ -> panic "REPL.Command.onlineProveSat"
+                           [ "satisfying assignments with different types" ]
+          (ty, exprs) =
+            case resultRecs of
+              [] -> panic "REPL.Command.onlineProveSat"
+                      [ "no satisfying assignments after mkSovlerResult" ]
+              [(t, e)] -> (t, [e])
+              _        -> collectTes resultRecs
+      forM_ vss ppvs
+      case (ty, exprs) of
+        (t, [e]) -> bindItVariable t e
+        (t, es ) -> bindItVariables t es
 
 offlineProveSat :: Bool -> String -> Maybe FilePath -> REPL ()
 offlineProveSat isSat str mfile = do
@@ -400,10 +424,11 @@ offlineProveSat isSat str mfile = do
   exsch <- replCheckExpr parseExpr
   decls <- fmap M.deDecls getDynEnv
   result <- liftModuleCmd $
-    Cryptol.Symbolic.satProveOffline isSat useIte vrb decls mfile exsch
+    Symbolic.satProveOffline isSat useIte vrb decls mfile exsch
   case result of
-    Left msg -> io $ putStrLn msg
-    Right () -> return ()
+    Symbolic.ProverError msg -> io $ putStrLn msg
+    Symbolic.EmptyResult -> return ()
+    _ -> panic "REPL.Command" [ "unexpected prover result for offline prover" ]
 
 -- | Make a type/expression pair that is suitable for binding to @it@
 -- after running @:sat@ or @:prove@
@@ -657,18 +682,30 @@ liftModuleCmd cmd = moduleCmdResult =<< io . cmd =<< getModuleEnv
 
 moduleCmdResult :: M.ModuleRes a -> REPL a
 moduleCmdResult (res,ws0) = do
-  EnvBool yes <- getUser "warnDefaulting"
+  EnvBool warnDefaulting <- getUser "warnDefaulting"
+  EnvBool warnShadowing  <- getUser "warnShadowing"
+  -- XXX: let's generalize this pattern
   let isDefaultWarn (T.DefaultingTo _ _) = True
       isDefaultWarn _ = False
 
+      filterDefaults w | warnDefaulting = Just w
       filterDefaults (M.TypeCheckWarnings xs) =
         case filter (not . isDefaultWarn . snd) xs of
           [] -> Nothing
           ys -> Just (M.TypeCheckWarnings ys)
       filterDefaults w = Just w
 
-  let ws = if yes then ws0
-                  else mapMaybe filterDefaults ws0
+      isShadowWarn (M.SymbolShadowed _ _) = True
+      isShadowWarn _ = False
+
+      filterShadowing w | warnShadowing = Just w
+      filterShadowing (M.RenamerWarnings xs) =
+        case filter (not . isShadowWarn) xs of
+          [] -> Nothing
+          ys -> Just (M.RenamerWarnings ys)
+      filterShadowing w = Just w
+
+  let ws = mapMaybe filterDefaults . mapMaybe filterShadowing $ ws0
   io (mapM_ (print . pp) ws)
   case res of
     Right (a,me') -> setModuleEnv me' >> return a
@@ -741,6 +778,16 @@ bindItVariable ty expr = do
   let en = M.EFromBind (P.Located emptyRange freshIt)
       nenv' = M.singletonE it en `M.shadowing` M.deNames denv
   setDynEnv $ denv { M.deNames = nenv' }
+
+-- | Creates a fresh binding of "it" to a finite sequence of
+-- expressions of the same type, and adds that sequence to the current
+-- dynamic environment
+bindItVariables :: T.Type -> [T.Expr] -> REPL ()
+bindItVariables ty exprs = bindItVariable seqTy seqExpr
+  where
+    len = length exprs
+    seqTy = T.tSeq (T.tNum len) ty
+    seqExpr = T.EList exprs ty
 
 replEvalDecl :: P.Decl -> REPL ()
 replEvalDecl decl = do
