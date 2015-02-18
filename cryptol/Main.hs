@@ -21,9 +21,8 @@ import REPL.Logo
 import qualified REPL.Monad as REPL
 
 import Cryptol.Utils.PP(pp)
-
 import System.Environment (lookupEnv)
-import System.FilePath (splitSearchPath)
+import System.FilePath (splitSearchPath,takeDirectory)
 
 data REPLOptions = REPLOptions
   { optLoad            :: [FilePath]
@@ -102,6 +101,10 @@ setupREPL opts = do
 #else
       where path' = splitSearchPath path
 #endif
+  case optBatch opts of
+    Nothing -> return ()
+    -- add the directory containing the batch file to the module search path
+    Just file -> prependSearchPath [ takeDirectory file ]
   case optLoad opts of
     []  -> loadPrelude `REPL.catch` \x -> io $ print $ pp x
     [l] -> loadCmd l `REPL.catch` \x -> io $ print $ pp x
