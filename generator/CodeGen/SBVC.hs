@@ -443,22 +443,22 @@ cgModule m env
   | otherwise                      = extEnv m env
 
 valueToC :: Maybe FilePath -> QName -> Value -> IO ()
-valueToC outDir qn val = compileToC outDir (cName qn) (genArgs val)
+valueToC outDir qn val = compileToC outDir (cName qn) (genArgs 0 val)
 
-genArgs :: Value -> SBVCodeGen ()
+genArgs :: Int -> Value -> SBVCodeGen ()
 
-genArgs (VFun f) =
-  do var <- cgInput "in"
+genArgs ix (VFun f) =
+  do var <- cgInput ("in" ++ show ix)
 
      -- TODO: have this type the input based on the actual expected type
-     genArgs (f (VWord (CWord8 var)))
+     genArgs (ix + 1) (f (VWord (CWord8 var)))
 
-genArgs (VWord (CWord8  w)) = cgOutput "out" w
-genArgs (VWord (CWord16 w)) = cgOutput "out" w
-genArgs (VWord (CWord32 w)) = cgOutput "out" w
-genArgs (VWord (CWord64 w)) = cgOutput "out" w
+genArgs _ (VWord (CWord8  w)) = cgOutput "out" w
+genArgs _ (VWord (CWord16 w)) = cgOutput "out" w
+genArgs _ (VWord (CWord32 w)) = cgOutput "out" w
+genArgs _ (VWord (CWord64 w)) = cgOutput "out" w
 
-genArgs _ =
+genArgs _ _ =
      fail "unexpected value?"
 
 
