@@ -8,6 +8,7 @@
 
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Cryptol.ModuleSystem.Env where
 
@@ -24,6 +25,8 @@ import Control.Monad (guard)
 import Data.Foldable (fold)
 import Data.Function (on)
 import qualified Data.Map as Map
+import qualified Data.Set as Set
+import Data.Maybe (catMaybes)
 import Data.Monoid ((<>), Monoid(..))
 import System.Directory (getAppUserDataDirectory, getCurrentDirectory)
 import System.Environment.Executable(splitExecutablePath)
@@ -143,6 +146,8 @@ data LoadedModule = LoadedModule
   , lmFilePath  :: FilePath
   , lmInterface :: Iface
   , lmModule    :: T.Module
+  , lmDeps      :: [ModName]
+    -- ^ All of the modules that this one depends on
   } deriving (Show)
 
 isLoaded :: ModName -> LoadedModules -> Bool
@@ -151,8 +156,8 @@ isLoaded mn lm = any ((mn ==) . lmName) (getLoadedModules lm)
 lookupModule :: ModName -> ModuleEnv -> Maybe LoadedModule
 lookupModule mn env = List.find ((mn ==) . lmName) (getLoadedModules (meLoadedModules env))
 
-addLoadedModule :: FilePath -> T.Module -> LoadedModules -> LoadedModules
-addLoadedModule path tm lm
+addLoadedModule :: FilePath -> [ModName] -> T.Module -> LoadedModules -> LoadedModules
+addLoadedModule path deps tm lm
   | isLoaded (T.mName tm) lm = lm
   | otherwise                = LoadedModules (getLoadedModules lm ++ [loaded])
   where
@@ -161,6 +166,7 @@ addLoadedModule path tm lm
     , lmFilePath  = path
     , lmInterface = genIface tm
     , lmModule    = tm
+    , lmDeps      = deps
     }
 
 removeLoadedModule :: FilePath -> LoadedModules -> LoadedModules
@@ -172,6 +178,24 @@ removeLoadedModule path (LoadedModules ms) = LoadedModules (remove ms)
     | otherwise             = lm : remove rest
 
   remove [] = []
+
+moduleDeps :: ModuleEnv -> ModName -> [T.Module]
+moduleDeps env root = catMaybes (List.unfoldr addDeps (Set.empty, [root]))
+  where
+
+  addDeps (seen, m:ms)
+    | m `Set.member` seen = Just (Nothing, (seen, ms))
+    | otherwise           =
+      case lookupModule m env of
+
+        Just LoadedModule { .. } ->
+          Just (Just lmModule, (Set.insert m seen, ms ++ lmDeps))
+
+        Nothing ->
+          Just (Nothing, (seen, ms))
+
+  addDeps (_, []) = Nothing
+
 
 -- Dynamic Environments --------------------------------------------------------
 

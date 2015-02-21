@@ -10,10 +10,14 @@ module Main where
 
 import CodeGen
 import Cryptol.ModuleSystem (loadModuleByPath, initialModuleEnv)
+import Cryptol.ModuleSystem.Env (moduleDeps)
 import Cryptol.Utils.PP (pp)
+import Data.Char (toLower)
 import Data.List (intercalate)
 import Data.String (fromString)
 import Options
+import System.Directory (doesFileExist,getDirectoryContents)
+import System.FilePath (takeExtension)
 import System.IO (hPrint, hPutStrLn, stderr)
 
 data CGOptions = CGOptions
@@ -78,9 +82,11 @@ codeGenFromOpts CGOptions
   , optOutput = outDir
   , optTarget = impl
   , optLoad   = inFiles
-  } = case inFiles of
-  [f] -> do
-    env <- initialModuleEnv
-    (modRes, _warnings) <- loadModuleByPath f env
-    either (hPrint stderr . pp) (codeGen outDir root impl) modRes
-  _   -> hPutStrLn stderr "Must specify exactly one file to load."
+  } = do
+  -- } = case inFiles of
+  -- [f] -> do
+    codeGen outDir root impl
+    -- env <- initialModuleEnv
+    -- (modRes, _warnings) <- loadModuleByPath f env
+    -- either (hPrint stderr . pp) (codeGen outDir root impl) modRes
+  -- _   -> hPutStrLn stderr "Must specify exactly one file to load."

@@ -17,6 +17,7 @@ module Cryptol.Eval (
   , evalDecls
   , EvalError(..)
   , WithBase(..)
+  , moduleEnvGeneric
   , evalExprGeneric
   , evalDeclsGeneric
   , concretely
@@ -28,7 +29,6 @@ import Cryptol.Eval.Env
 import Cryptol.Eval.Type
 import Cryptol.Eval.Value
 import Cryptol.TypeCheck.AST
-import Cryptol.Utils.Panic (panic)
 import Cryptol.Utils.PP
 import Cryptol.Prims.Syntax (ECon)
 import Cryptol.Prims.Eval
@@ -70,7 +70,12 @@ concretely = ExprOperations
 -- Expression Evaluation -------------------------------------------------------
 
 moduleEnv :: Module -> EvalEnv -> EvalEnv
-moduleEnv m env = evalDecls (mDecls m) (evalNewtypes (mNewtypes m) env)
+moduleEnv  = moduleEnvGeneric concretely
+
+moduleEnvGeneric :: (Monoid env, BitWord b w)
+                 => ExprOperations env b w -> Module -> env -> env
+moduleEnvGeneric ops m env =
+  evalDeclsGeneric ops (evalNewtypesGeneric ops (mNewtypes m) env) (mDecls m)
 
 evalExpr :: EvalEnv -> Expr -> Value
 evalExpr = evalExprGeneric concretely
@@ -110,12 +115,14 @@ evalExprGeneric ops = eval where
 
 -- Newtypes --------------------------------------------------------------------
 
-evalNewtypes :: Map.Map QName Newtype -> EvalEnv -> EvalEnv
-evalNewtypes nts env = Map.foldl (flip evalNewtype) env nts
+evalNewtypesGeneric ::ExprOperations env w b -> Map.Map QName Newtype -> env -> env
+evalNewtypesGeneric ops nts env = Map.foldl eval env nts
+  where
+  eval e n = evalNewtypeGeneric ops n e
 
 -- | Introduce the constructor function for a newtype.
-evalNewtype :: Newtype -> EvalEnv -> EvalEnv
-evalNewtype nt = bindVar (ntName nt) (foldr tabs con (ntParams nt))
+evalNewtypeGeneric :: ExprOperations env w b -> Newtype -> env -> env
+evalNewtypeGeneric ops nt = eoBindTerm ops (ntName nt) (foldr tabs con (ntParams nt))
   where
   tabs _tp body = tlam (\ _ -> body)
   con           = VFun id

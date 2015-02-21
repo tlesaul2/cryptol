@@ -32,7 +32,7 @@ import qualified Control.Exception as X
 import Control.Monad (unless)
 import Data.Foldable (foldMap)
 import Data.Function (on)
-import Data.List (nubBy)
+import Data.List (nubBy,find)
 import Data.Maybe (mapMaybe,fromMaybe)
 import Data.Monoid ((<>))
 import System.Directory (doesFileExist)
@@ -115,6 +115,12 @@ parseModule path = do
 
 -- Modules ---------------------------------------------------------------------
 
+-- | Find a declaration with the given name within a module.
+lookupDecl :: QName -> T.Module -> Maybe T.Decl
+lookupDecl qn m = find (\d -> T.dName d == qn)
+                $ concatMap T.groupDecls
+                $ T.mDecls m
+
 -- | Load a module by its path.
 loadModuleByPath :: FilePath -> ModuleM T.Module
 loadModuleByPath path = withPrependedSearchPath [ takeDirectory path ] $ do
@@ -135,7 +141,7 @@ loadModuleByPath path = withPrependedSearchPath [ takeDirectory path ] $ do
 
 
 -- | Load the module specified by an import.
-loadImport :: Located P.Import -> ModuleM ()
+loadImport :: Located P.Import -> ModuleM ModName
 loadImport li = do
 
   let i = thing li
@@ -153,12 +159,14 @@ loadImport li = do
          _ <- loadModule path pm
          return ()
 
+  return n
+
 -- | Load dependencies, typecheck, and add to the eval environment.
 loadModule :: FilePath -> P.Module -> ModuleM T.Module
 loadModule path pm = do
 
   let pm' = addPrelude pm
-  loadDeps pm'
+  deps <- loadDeps pm'
 
   -- XXX make it possible to configure output
   io (putStrLn ("Loading module " ++ pretty (P.thing (P.mName pm'))))
@@ -168,7 +176,7 @@ loadModule path pm = do
   -- extend the eval env
   modifyEvalEnv (E.moduleEnv tcm)
 
-  loadedModule path tcm
+  loadedModule path deps tcm
 
   return tcm
 
@@ -248,11 +256,12 @@ addPrelude m
       }
     }
 
--- | Load the dependencies of a module into the environment.
-loadDeps :: Module -> ModuleM ()
+-- | Load the dependencies of a module into the environment.  Return the names
+-- of all the direct dependencies.
+loadDeps :: Module -> ModuleM [ModName]
 loadDeps m
-  | null needed = return ()
-  | otherwise   = mapM_ load needed
+  | null needed = return []
+  | otherwise   = mapM load needed
   where
   needed  = nubBy ((==) `on` P.iModule . thing) (P.mImports m)
   load mn = loadImport mn

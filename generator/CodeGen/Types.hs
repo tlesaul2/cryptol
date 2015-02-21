@@ -13,6 +13,11 @@ module CodeGen.Types where
 import Data.Char
 import Data.String
 
+import Cryptol.Parser.AST (QName)
+import Cryptol.ModuleSystem (ModuleError)
+import Cryptol.Utils.PP (Doc,PP(..))
+
+
 data GenerationRoot
   = Identifier String
   | Module     String
@@ -38,3 +43,16 @@ targetMapping = [("sbvc", SBVC), ("sv", SV), ("bsv", BSV), ("verilog", Verilog)]
 -- | 'String' versions of the 'GenerationTarget' values.
 knownTargets :: [String]
 knownTargets = map fst targetMapping
+
+-- | Processed generation roots.
+data Root = FromIdent FilePath QName
+          | FromFiles [FilePath]
+            deriving (Show)
+
+data Error = Error Doc
+           | ModuleError ModuleError
+             deriving (Show)
+
+instance PP Error where
+  ppPrec _ (Error msg)      = msg
+  ppPrec p (ModuleError me) = ppPrec p me

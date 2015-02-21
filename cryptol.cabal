@@ -207,7 +207,9 @@ executable cryptolgen
   build-depends:       base,
                        containers,
                        cryptol,
-                       sbv
+                       sbv,
+                       directory,
+                       filepath
   GHC-options:         -Wall -O2
   ghc-prof-options:    -auto-all -prof -rtsopts
 

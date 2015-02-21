@@ -3,6 +3,8 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ConstraintKinds #-}
 -- |
 -- Module      :  $Header$
 -- Copyright   :  (c) 2014-2015 Galois, Inc.
@@ -16,14 +18,16 @@ module CodeGen.SBVC where
 import Control.Applicative
 import Data.List (intercalate)
 import Data.Map (Map)
-import Data.Maybe
 import Data.Monoid
 import Data.SBV
 import qualified Data.Map as M
 
-import Cryptol.Eval (ExprOperations(..))
+import Cryptol.Eval (ExprOperations(..), moduleEnvGeneric)
 import Cryptol.Eval.Value (BitWord(..), GenValue(..), PPOpts(..), TValue(..), WithBase(..), defaultPPOpts)
-import Cryptol.ModuleSystem (ModuleEnv(..), checkExpr, focusedEnv)
+import Cryptol.ModuleSystem (ModuleEnv(..), checkExpr, focusedEnv, initialModuleEnv)
+import Cryptol.ModuleSystem.Env (moduleDeps)
+import Cryptol.ModuleSystem.Monad (runModuleM, ModuleM, getModuleEnv, io)
+import qualified Cryptol.ModuleSystem.Base as Base
 import Cryptol.ModuleSystem.Renamer (namingEnv, rename, runRenamer)
 import Cryptol.Parser (parseExpr)
 import Cryptol.Parser.Position (Range, emptyRange)
@@ -46,7 +50,7 @@ import qualified Cryptol.Eval.Type  as Eval
 import qualified Cryptol.Eval.Env   as Eval
 import qualified Cryptol.Utils.PP   as PP
 
-import CodeGen.Types
+import qualified CodeGen.Types as T
 
 
 -- CWord -----------------------------------------------------------------------
@@ -134,12 +138,10 @@ liftBinCWord op8 op16 op32 op64 _ cl cr = case (cl, cr) of
     , show (cWidth cr)
     ]
 
--- | Essentially a type alias for all the classes supported by the kinds of
--- words contained in a 'CWord'. Not literally a type alias to avoid the
--- ConstraintKinds extension. Commented-out contexts are ones which we could
--- support but don't for now because we aren't using them yet and don't want to
--- spuriously add imports.
-class
+-- | All the classes supported by the kinds of words contained in a 'CWord'.
+-- Commented-out contexts are ones which we could support but don't for now
+-- because we aren't using them yet and don't want to spuriously add imports.
+type SBVWord a =
   ( SDivisible a
   , FromBits a
   , Polynomial a
@@ -159,29 +161,7 @@ class
   , Mergeable a
   , OrdSymbolic a
   , EqSymbolic a
-  ) => SBVWord a
-
-instance
-  ( SDivisible a
-  , FromBits a
-  , Polynomial a
-  , Bounded a
-  , Enum a
-  , Eq a
-  , Num a
-  , Show a
-  -- , Arbitrary a
-  , Bits a
-  -- , NFData a
-  -- , Random a
-  , SExecutable a
-  , Data.SBV.HasKind a
-  , PrettyNum a
-  , Uninterpreted a
-  , Mergeable a
-  , OrdSymbolic a
-  , EqSymbolic a
-  ) => SBVWord a
+  )
 
 liftBinSBVWord :: (forall a. SBVWord a => BinOp a) -> Integer -> BinOp CWord
 liftBinSBVWord op = liftBinCWord op op op op
@@ -198,6 +178,10 @@ instance Mergeable CWord where
 -- Primitives ------------------------------------------------------------------
 
 type Value = GenValue SBool CWord
+
+-- | Extend an environment with the contents of a module.
+extEnv :: Module -> Env -> Env
+extEnv  = moduleEnvGeneric withSBVC
 
 -- See also Cryptol.Symbolic.Prims.evalECon
 --      and Cryptol.Prims.Eval.evalECon
@@ -418,26 +402,86 @@ instance CName QName where
   cName (QName (Just (ModName mods)) name) = intercalate "_" mods ++ "_" ++ cName name
   cName (QName Nothing name) = cName name
 
+
+-- | Interpret a GenerationRoot, producing code that goes into the given output
+-- directory.
+codeGen :: Maybe FilePath -- ^ The output directory
+        -> T.Root         -- ^ Where to start
+        -> ModuleM ()
+
+codeGen outDir (T.FromIdent path qn) =
+  do env <- cgAllModulesFrom path
+     case lookupGlobalTerm qn env of
+       Just tm -> io (valueToC outDir qn tm)
+       Nothing -> fail ("Unable to find symbol: " ++ pretty qn)
+
+codeGen outDir (T.FromFiles files)   = undefined
+
+
+guardHasDecl :: Module -> QName -> ModuleM ()
+guardHasDecl m qn =
+  case Base.lookupDecl qn m of
+    Just _  -> return ()
+    Nothing -> fail $ show $ text "Unable to find" PP.<+> PP.quotes (pp (P.unqual qn))
+                         PP.<+> text "in module" PP.<+> PP.quotes (pp (mName m))
+
+-- | Given a module path, produce an environment that can be used for code
+-- generation.
+cgAllModulesFrom :: FilePath -> ModuleM Env
+cgAllModulesFrom path =
+  do m    <- Base.loadModuleByPath path
+     env  <- getModuleEnv
+     let deps = moduleDeps env (mName m)
+
+     return (foldr cgModule mempty deps)
+
+-- | Extend the given environment.
+cgModule :: Module -> Env -> Env
+cgModule m env
+    -- skip the prelude
+  | mName m == ModName ["Cryptol"] =          env
+  | otherwise                      = extEnv m env
+
+valueToC :: Maybe FilePath -> QName -> Value -> IO ()
+valueToC outDir qn val = compileToC outDir (cName qn) (genArgs val)
+
+genArgs :: Value -> SBVCodeGen ()
+
+genArgs (VFun f) =
+  do var <- cgInput "in"
+
+     -- TODO: have this type the input based on the actual expected type
+     genArgs (f (VWord (CWord8 var)))
+
+genArgs (VWord (CWord8  w)) = cgOutput "out" w
+genArgs (VWord (CWord16 w)) = cgOutput "out" w
+genArgs (VWord (CWord32 w)) = cgOutput "out" w
+genArgs (VWord (CWord64 w)) = cgOutput "out" w
+
+genArgs _ =
+     fail "unexpected value?"
+
+
 -- TODO:
 -- * put module bindings in the environment
 -- * handle pattern match failures
-codeGen :: Maybe FilePath -> GenerationRoot -> (Module, ModuleEnv) -> IO ()
-codeGen dir (Identifier id) (mod, modEnv) =
-  case parseExpr id of
-    Right e -> checkExpr e modEnv >>= \resT -> case resT of
-      (Right ((e', schema), modEnv'), []) -> case defaultExpr (location e) e' schema of
-        Just (subst, eMono) -> case apSubst subst schema of
-          Forall [] [] t -> case eMono of
-            EVar qn -> compileToC dir (cName qn) (supplyArgs eMono t)
+-- codeGen :: Maybe FilePath -> GenerationRoot -> (Module, ModuleEnv) -> IO ()
+-- codeGen dir (Identifier id) (mod, modEnv) =
+--   case parseExpr id of
+--     Right e -> checkExpr e modEnv >>= \resT -> case resT of
+--       (Right ((e', schema), modEnv'), []) -> case defaultExpr (location e) e' schema of
+--         Just (subst, eMono) -> case apSubst subst schema of
+--           Forall [] [] t -> case eMono of
+--             EVar qn -> compileToC dir (cName qn) (supplyArgs eMono t)
 
-pattern PSeq ty len = TCon (TC TCSeq) [ty, PNum len]
-pattern PNum n = TCon (TC (TCNum n)) []
-pattern PBit = TCon (TC TCBit) []
-pattern i :-> o = TCon (TC TCFun) [i, o]
-pattern PWord n = PSeq PBit n
+-- pattern PSeq ty len = TCon (TC TCSeq) [ty, PNum len]
+-- pattern PNum n = TCon (TC (TCNum n)) []
+-- pattern PBit = TCon (TC TCBit) []
+-- pattern i :-> o = TCon (TC TCFun) [i, o]
+-- pattern PWord n = PSeq PBit n
 
--- TODO
-supplyArgs :: Expr -> Type -> SBVCodeGen ()
-supplyArgs = go . evalExpr mempty where
-  go (VWord (CWord8 w)) (PWord 8) = cgOutput "out" w
-  go (VFun f) (PWord 8 :-> t) = cgInput "in" >>= \w -> go (f (VWord (CWord8 w))) t
+-- -- TODO
+-- supplyArgs :: Expr -> Type -> SBVCodeGen ()
+-- supplyArgs = go . evalExpr mempty where
+--   go (VWord (CWord8 w)) (PWord 8) = cgOutput "out" w
+--   go (VFun f) (PWord 8 :-> t) = cgInput "in" >>= \w -> go (f (VWord (CWord8 w))) t

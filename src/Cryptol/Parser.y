@@ -10,6 +10,7 @@ module Cryptol.Parser
   , parseRepl, parseReplWith
   , parseSchema, parseSchemaWith
   , parseModName
+  , parseQName
   , ParseError(..), ppError
   , Layout(..)
   , Config(..), defaultConfig
@@ -151,6 +152,7 @@ import Paths_cryptol
 %name repl    repl
 %name schema  schema
 %name modName modName
+%name qname   qname
 %tokentype { Located Token }
 %monad { ParseM }
 %lexer { lexerP } { Located _ (Token EOF _) }
@@ -713,6 +715,12 @@ field_ty_vals                  :: { [Named Type] }
 
 
 {
+
+parseQName :: String -> Maybe QName
+parseQName txt =
+  case parse defaultConfig { cfgModuleScope = False } qname txt of
+    Right a -> Just (thing a)
+    Left _  -> Nothing
 
 parseModName :: String -> Maybe ModName
 parseModName txt =
