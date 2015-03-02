@@ -21,6 +21,7 @@ import REPL.Logo
 import qualified REPL.Monad as REPL
 
 import Cryptol.Utils.PP(pp)
+import GHC.IO.Encoding (setLocaleEncoding, utf8)
 import System.Environment (lookupEnv)
 import System.FilePath (splitSearchPath,takeDirectory)
 
@@ -83,6 +84,7 @@ setCryptolPathOnly  = modifyOpt $ \opts -> opts { optCryptolPathOnly = True }
 
 main :: IO ()
 main  = do
+  setLocaleEncoding utf8
   opts <- getOpts argParser
   repl (optDotCryptol opts) (optBatch opts) (setupREPL opts)
 
