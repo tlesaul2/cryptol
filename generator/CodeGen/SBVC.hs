@@ -17,12 +17,14 @@ module CodeGen.SBVC where
 
 import Control.Applicative
 import Data.List (intercalate)
+import Data.Foldable (foldrM)
 import Data.Map (Map)
 import Data.Monoid
 import Data.SBV
+import qualified Data.SBV.Internals as SBV
 import qualified Data.Map as M
 
-import Cryptol.Eval (ExprOperations(..), moduleEnvGeneric)
+import Cryptol.Eval (ExprOperations(..), evalDeclsGeneric, evalNewtypesGeneric)
 import Cryptol.Eval.Value (BitWord(..), GenValue(..), PPOpts(..), TValue(..), WithBase(..), defaultPPOpts)
 import Cryptol.ModuleSystem (ModuleEnv(..), checkExpr, focusedEnv, initialModuleEnv)
 import Cryptol.ModuleSystem.Env (moduleDeps)
@@ -36,7 +38,8 @@ import Cryptol.Prims.Syntax
 import Cryptol.Symbolic.Value () -- for its instance Mergeable (GenValue b w)
 import Cryptol.TypeCheck.AST
            (ModName(..), QName(..), Name(..), TVar, Expr, Type(..), Schema(..),
-            TCon(..), TC(..), Expr(..), Module(..))
+            TCon(..), TC(..), Expr(..), Module(..), Decl(..), DeclGroup(),
+            groupDecls)
 import Cryptol.TypeCheck.Defaulting (defaultExpr)
 import Cryptol.TypeCheck.Subst (apSubst)
 import Cryptol.Utils.Compare
@@ -181,7 +184,13 @@ type Value = GenValue SBool CWord
 
 -- | Extend an environment with the contents of a module.
 extEnv :: Module -> Env -> Env
-extEnv  = moduleEnvGeneric withSBVC
+extEnv m = evalTopDecls (mDecls m)
+         . evalNewtypesGeneric withSBVC (mNewtypes m)
+
+evalTopDecls :: [DeclGroup] -> Env -> Env
+evalTopDecls ds env = evalDeclsGeneric withSBVC env' ds
+  where
+  env' = foldl addUninterpreted env (concatMap groupDecls ds)
 
 -- See also Cryptol.Symbolic.Prims.evalECon
 --      and Cryptol.Prims.Eval.evalECon
@@ -256,12 +265,77 @@ unArith opName op = Eval.unary $ Eval.pointwiseUnary
   (liftUnSBVWord op)
 
 
+-- Uninterpreted Functions -----------------------------------------------------
+
+addUninterpreted :: Env -> Decl -> Env
+addUninterpreted env Decl { .. } = bindUninterpretedTerm dName val env
+  where
+  val = bindArgs dName dSignature
+
+-- | Generate a value that will apply arguments to an uninterpreted value.
+bindArgs :: QName -> Schema -> Value
+bindArgs qn sig = go [] args
+
+  where
+
+  (args,res) = flattenSchema sig
+
+  badType ty =
+    error ("bindArgs: unsupported type: " ++ pretty qn ++ " : " ++ pretty ty ++ "(" ++ show ty ++ ")")
+
+  kind =
+    case res of
+      PWord n | n `elem` [8,16,32,64] -> KBounded False (fromInteger n)
+      _                               -> badType res
+
+  go vals (PWord n : rest)
+    | n `elem` [8, 16, 32, 64] =
+      VFun (\ (VWord val) -> go (val:vals) rest )
+
+  go _ (ty:_) = badType ty
+
+  -- TODO: allow results other than CWord8
+  go vals [] =
+    VWord $ CWord8 $ SBV.SBV kind $ Right $ SBV.cache $ \ st ->
+      do words <- mapM (toSW st) (reverse vals)
+         print ("generating", qn)
+         SBV.newExpr st kind (SBV.SBVApp (SBV.Uninterpreted (cName qn)) words)
+
+  toSW st (CWord8  sbv) = SBV.sbvToSW st sbv
+  toSW st (CWord16 sbv) = SBV.sbvToSW st sbv
+  toSW st (CWord32 sbv) = SBV.sbvToSW st sbv
+  toSW st (CWord64 sbv) = SBV.sbvToSW st sbv
+
+  toSW _ _ = error "bindArgs: toSW"
+
+
+-- | Flattens a schema into the arguments, and result type.
+--
+-- TODO: What should we do if we encounter something other than a monomorphic
+-- type?
+flattenSchema :: Schema -> ([Type],Type)
+
+flattenSchema (Forall [] [] ty) = go [] ty
+  where
+  go is (TCon (TC TCFun) [i, o]) = go (i:is) o
+  go is res                      = (reverse is, res)
+
+flattenSchema _ = error "flattenSchema: Unexpected polymorphic schema"
+
+
+pattern PNum n = TCon (TC (TCNum n)) []
+pattern PSeq ty len = TCon (TC TCSeq) [PNum len, ty]
+pattern PBit = TCon (TC TCBit) []
+pattern i :-> o = TCon (TC TCFun) [i, o]
+pattern PWord n = PSeq PBit n
+
+
 -- Environments ----------------------------------------------------------------
 
 -- | Invariant: the uninterpreted names are a subset of the local names.
 data Env = Env
-  { envLocal         :: Map QName Value  -- ^ global declarations which should be inlined + things that are in a local scope
-  , envUninterpreted :: Map QName Schema -- ^ declarations which should not be inlined
+  { envLocal         :: Map QName Value -- ^ global declarations which should be inlined + things that are in a local scope
+  , envUninterpreted :: Map QName Value -- ^ declarations which should not be inlined
   , envTypes         :: Map TVar TValue
   }
 
@@ -276,11 +350,14 @@ bindLocalTerm n v e = e { envLocal = M.insert n v (envLocal e) }
 
 -- | Intended for internal use only, as it can violate the invariant that
 -- uninterpreted names are a subset of local names.
-bindUninterpretedTerm :: QName -> Schema -> Env -> Env
-bindUninterpretedTerm n t e = e { envUninterpreted = M.insert n t (envUninterpreted e) }
+bindUninterpretedTerm :: QName -> Value -> Env -> Env
+bindUninterpretedTerm n v e = e { envUninterpreted = M.insert n v (envUninterpreted e) }
 
-bindGlobalTerm :: QName -> Value -> Schema -> Env -> Env
-bindGlobalTerm n v t = bindLocalTerm n v . bindUninterpretedTerm n t
+bindGlobalTerm :: QName
+               -> Value -- ^ Function implementation
+               -> Value -- ^ Uninterpreted variant
+               -> Env -> Env
+bindGlobalTerm n v uv = bindLocalTerm n v . bindUninterpretedTerm n uv
 
 bindType :: TVar -> TValue -> Env -> Env
 bindType n v e = e { envTypes = M.insert n v (envTypes e) }
@@ -290,9 +367,7 @@ lookupLocalTerm n e = M.lookup n (envLocal e)
 
 -- | Intended for internal use only (but not dangerous).
 lookupUninterpretedTerm :: QName -> Env -> Maybe Value
-lookupUninterpretedTerm n e = do
-  t <- M.lookup n (envUninterpreted e)
-  Nothing -- TODO: manufacture uninterpreted values for suitably simple schemes
+lookupUninterpretedTerm n e = M.lookup n (envUninterpreted e)
 
 lookupGlobalTerm :: QName -> Env -> Maybe Value
 lookupGlobalTerm n e = lookupUninterpretedTerm n e <|> lookupLocalTerm n e
@@ -411,9 +486,10 @@ codeGen :: Maybe FilePath -- ^ The output directory
 
 codeGen outDir (T.FromIdent path qn) =
   do env <- cgAllModulesFrom path
-     case lookupGlobalTerm qn env of
-       Just tm -> io (valueToC outDir qn tm)
-       Nothing -> fail ("Unable to find symbol: " ++ pretty qn)
+     io $ compileToC outDir (cName qn) $
+         case lookupLocalTerm qn env of
+           Just tm -> valueToC tm
+           Nothing -> fail ("Unable to find symbol: " ++ pretty qn)
 
 codeGen outDir (T.FromFiles files)   = undefined
 
@@ -439,11 +515,13 @@ cgAllModulesFrom path =
 cgModule :: Module -> Env -> Env
 cgModule m env
     -- skip the prelude
-  | mName m == ModName ["Cryptol"] =          env
+  | mName m == ModName ["Cryptol"] = env
   | otherwise                      = extEnv m env
 
-valueToC :: Maybe FilePath -> QName -> Value -> IO ()
-valueToC outDir qn val = compileToC outDir (cName qn) (genArgs 0 val)
+valueToC :: Value -> SBVCodeGen ()
+valueToC val =
+  do _ <- genArgs 0 val
+     return ()
 
 genArgs :: Int -> Value -> SBVCodeGen ()
 
@@ -473,12 +551,6 @@ genArgs _ _ =
 --         Just (subst, eMono) -> case apSubst subst schema of
 --           Forall [] [] t -> case eMono of
 --             EVar qn -> compileToC dir (cName qn) (supplyArgs eMono t)
-
--- pattern PSeq ty len = TCon (TC TCSeq) [ty, PNum len]
--- pattern PNum n = TCon (TC (TCNum n)) []
--- pattern PBit = TCon (TC TCBit) []
--- pattern i :-> o = TCon (TC TCFun) [i, o]
--- pattern PWord n = PSeq PBit n
 
 -- -- TODO
 -- supplyArgs :: Expr -> Type -> SBVCodeGen ()

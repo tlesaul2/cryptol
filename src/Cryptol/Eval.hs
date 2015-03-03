@@ -20,6 +20,7 @@ module Cryptol.Eval (
   , moduleEnvGeneric
   , evalExprGeneric
   , evalDeclsGeneric
+  , evalNewtypesGeneric
   , concretely
   , ExprOperations(..)
   ) where
