@@ -280,6 +280,7 @@ bindArgs qn sig = go [] args
 
   (args,res) = flattenSchema sig
 
+  -- TODO: change to panic
   badType ty =
     error ("bindArgs: unsupported type: " ++ pretty qn ++ " : " ++ pretty ty ++ "(" ++ show ty ++ ")")
 
@@ -298,7 +299,6 @@ bindArgs qn sig = go [] args
   go vals [] =
     VWord $ CWord8 $ SBV.SBV kind $ Right $ SBV.cache $ \ st ->
       do words <- mapM (toSW st) (reverse vals)
-         print ("generating", qn)
          SBV.newExpr st kind (SBV.SBVApp (SBV.Uninterpreted (cName qn)) words)
 
   toSW st (CWord8  sbv) = SBV.sbvToSW st sbv
@@ -469,6 +469,9 @@ location _ = emptyRange
 
 class CName a where cName :: a -> String
 
+instance CName ModName where
+  cName (ModName mods) = intercalate "_" mods
+
 instance CName Name where
   cName (Name s) = s
   cName (NewName pass n) = show pass ++ "_" ++ show n
@@ -485,13 +488,13 @@ codeGen :: Maybe FilePath -- ^ The output directory
         -> ModuleM ()
 
 codeGen outDir (T.FromIdent path qn) =
-  do env <- cgAllModulesFrom path
-     io $ compileToC outDir (cName qn) $
-         case lookupLocalTerm qn env of
-           Just tm -> valueToC tm
-           Nothing -> fail ("Unable to find symbol: " ++ pretty qn)
+  do (env,mods) <- cgAllModulesFrom path
+     let m    = head mods
+         name = cName (mName m)
+     io (print name)
+     io (compileToCLib outDir (cName qn) (moduleToC env m))
 
-codeGen outDir (T.FromFiles files)   = undefined
+codeGen outDir (T.FromFiles files) = undefined
 
 
 guardHasDecl :: Module -> QName -> ModuleM ()
@@ -503,13 +506,13 @@ guardHasDecl m qn =
 
 -- | Given a module path, produce an environment that can be used for code
 -- generation.
-cgAllModulesFrom :: FilePath -> ModuleM Env
+cgAllModulesFrom :: FilePath -> ModuleM (Env,[Module])
 cgAllModulesFrom path =
   do m    <- Base.loadModuleByPath path
      env  <- getModuleEnv
      let deps = moduleDeps env (mName m)
 
-     return (foldr cgModule mempty deps)
+     return (foldr cgModule mempty deps, deps)
 
 -- | Extend the given environment.
 cgModule :: Module -> Env -> Env
@@ -518,9 +521,19 @@ cgModule m env
   | mName m == ModName ["Cryptol"] = env
   | otherwise                      = extEnv m env
 
+moduleToC :: Env -> Module -> [(String,SBVCodeGen ())]
+moduleToC env Module { .. } = [ mkDecl d | dg <- mDecls, d <- groupDecls dg ]
+  where
+  mkDecl Decl { .. } =
+    case lookupLocalTerm dName env of
+      Just val -> (cName dName, valueToC val)
+      Nothing  -> error ("value not in scope: " ++ show dName)
+
 valueToC :: Value -> SBVCodeGen ()
 valueToC val =
-  do _ <- genArgs 0 val
+  do cgGenerateMakefile False
+     cgGenerateDriver   False
+     _ <- genArgs 0 val
      return ()
 
 genArgs :: Int -> Value -> SBVCodeGen ()
@@ -531,10 +544,10 @@ genArgs ix (VFun f) =
      -- TODO: have this type the input based on the actual expected type
      genArgs (ix + 1) (f (VWord (CWord8 var)))
 
-genArgs _ (VWord (CWord8  w)) = cgOutput "out" w
-genArgs _ (VWord (CWord16 w)) = cgOutput "out" w
-genArgs _ (VWord (CWord32 w)) = cgOutput "out" w
-genArgs _ (VWord (CWord64 w)) = cgOutput "out" w
+genArgs _ (VWord (CWord8  w)) = cgReturn w
+genArgs _ (VWord (CWord16 w)) = cgReturn w
+genArgs _ (VWord (CWord32 w)) = cgReturn w
+genArgs _ (VWord (CWord64 w)) = cgReturn w
 
 genArgs _ _ =
      fail "unexpected value?"
