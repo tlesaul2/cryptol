@@ -102,9 +102,6 @@ CRYPTOL_SRC := \
             -and \( -not -name \*\#\* \) -print) \
   $(shell find lib -name \*.cry)
 
-src/GitRev.hs:
-	sh configure
-
 print-%:
 	@echo $* = $($*)
 
@@ -131,7 +128,7 @@ dist/setup-config: cryptol.cabal Makefile | ${CS_BIN}/alex ${CS_BIN}/happy
 	$(CABAL) configure ${PREFIX_ARG} --datasubdir=cryptol \
           ${CONFIGURE_ARGS}
 
-${CRYPTOL_EXE}: $(CRYPTOL_SRC) src/GitRev.hs dist/setup-config
+${CRYPTOL_EXE}: $(CRYPTOL_SRC) dist/setup-config
 	$(CABAL_BUILD)
 
 
