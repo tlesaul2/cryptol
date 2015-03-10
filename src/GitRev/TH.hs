@@ -21,9 +21,13 @@ runGit args def = do
   if gitFound
     then do
       pwd <- runIO $ getCurrentDirectory
-      let index = pwd </> ".git" </> "index"
+      let head  = pwd </> ".git" </> "HEAD"
+          index = pwd </> ".git" </> "index"
+      headExists  <- runIO $ doesFileExist head
       indexExists <- runIO $ doesFileExist index
-      when indexExists $ addDependentFile index
+      when (headExists && indexExists) $ do
+        addDependentFile head
+        addDependentFile index
       runIO $ (takeWhile (/= '\n') <$> readProcess "git" args "") `catch` oops
     else return def
 
