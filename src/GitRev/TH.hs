@@ -33,7 +33,7 @@ runGit args def = do
         case splitAt 5 hdRef of
           -- pointer to ref
           ("ref: ", relRef) -> do
-            let ref = return $ pwd </> ".git" </> relRef
+            let ref = pwd </> ".git" </> relRef
             refExists <- runIO $ doesFileExist ref
             when refExists $ addDependentFile ref
           -- detached head
