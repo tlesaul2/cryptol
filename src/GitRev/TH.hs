@@ -20,14 +20,28 @@ runGit args def = do
   gitFound <- runIO $ isJust <$> findExecutable "git"
   if gitFound
     then do
+      -- a lot of bookkeeping to record the right dependencies
       pwd <- runIO $ getCurrentDirectory
-      let head  = pwd </> ".git" </> "HEAD"
-          index = pwd </> ".git" </> "index"
-      headExists  <- runIO $ doesFileExist head
+      let hd         = pwd </> ".git" </> "HEAD"
+          index      = pwd </> ".git" </> "index"
+          packedRefs = pwd </> ".git" </> "packed-refs"
+      hdExists  <- runIO $ doesFileExist hd
+      when hdExists $ do
+        -- the HEAD file contains a pointer to the file that contains
+        -- the current commit hash
+        hdRef <- runIO $ readFile hd
+        ref <- case splitAt 5 hdRef of
+                 ("ref: ", relRef) -> return $ pwd </> ".git" </> relRef
+                 _ -> fail ".git/HEAD pointed to non-existent ref"
+        refExists <- runIO $ doesFileExist ref
+        when refExists $ addDependentFile ref
       indexExists <- runIO $ doesFileExist index
-      when (headExists && indexExists) $ do
-        addDependentFile head
-        addDependentFile index
+      when indexExists $ addDependentFile index
+      -- if the refs have been packed, the info we're looking for
+      -- might be in that file rather than the one-file-per-ref case
+      -- handled above
+      packedExists <- runIO $ doesFileExist packedRefs
+      when packedExists $ addDependentFile packedRefs
       runIO $ (takeWhile (/= '\n') <$> readProcess "git" args "") `catch` oops
     else return def
 

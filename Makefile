@@ -96,11 +96,23 @@ ${CS_BIN}/alex: | ${CS}
 ${CS_BIN}/happy: | ${CS} ${CS_BIN}/alex
 	$(CABAL_INSTALL) happy
 
+GIT_INFO_FILES :=
+ifneq ("$(wildcard .git/index)","")
+GIT_INFO_FILES := ${GIT_INFO_FILES} .git/index
+endif
+ifneq ("$(wildcard .git/HEAD)","")
+GIT_INFO_FILES := ${GIT_INFO_FILES} .git/HEAD
+endif
+ifneq ("$(wildcard .git/packed-refs)","")
+GIT_INFO_FILES := ${GIT_INFO_FILES} .git/packed-refs
+endif
+
 CRYPTOL_SRC := \
   $(shell find src cryptol \
             \( -name \*.hs -or -name \*.x -or -name \*.y \) \
             -and \( -not -name \*\#\* \) -print) \
-  $(shell find lib -name \*.cry)
+  $(shell find lib -name \*.cry) \
+  ${GIT_INFO_FILES}
 
 print-%:
 	@echo $* = $($*)
