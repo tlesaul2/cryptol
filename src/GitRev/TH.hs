@@ -27,14 +27,18 @@ runGit args def = do
           packedRefs = pwd </> ".git" </> "packed-refs"
       hdExists  <- runIO $ doesFileExist hd
       when hdExists $ do
-        -- the HEAD file contains a pointer to the file that contains
-        -- the current commit hash
+        -- the HEAD file either contains the hash of a detached head
+        -- or a pointer to the file that contains the hash of the head
         hdRef <- runIO $ readFile hd
-        ref <- case splitAt 5 hdRef of
-                 ("ref: ", relRef) -> return $ pwd </> ".git" </> relRef
-                 _ -> fail ".git/HEAD pointed to non-existent ref"
-        refExists <- runIO $ doesFileExist ref
-        when refExists $ addDependentFile ref
+        case splitAt 5 hdRef of
+          -- pointer to ref
+          ("ref: ", relRef) -> do
+            let ref = return $ pwd </> ".git" </> relRef
+            refExists <- runIO $ doesFileExist ref
+            when refExists $ addDependentFile ref
+          -- detached head
+          _hash -> addDependentFile hd
+      -- add the index if it exists to set the dirty flag
       indexExists <- runIO $ doesFileExist index
       when indexExists $ addDependentFile index
       -- if the refs have been packed, the info we're looking for
