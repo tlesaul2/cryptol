@@ -12,7 +12,9 @@
 
 module Cryptol.ModuleSystem.Env where
 
+#ifndef RELOCATABLE
 import Paths_cryptol (getDataDir)
+#endif
 
 import Cryptol.Eval (EvalEnv)
 import Cryptol.ModuleSystem.Interface
@@ -29,8 +31,8 @@ import qualified Data.Set as Set
 import Data.Maybe (catMaybes)
 import Data.Monoid ((<>), Monoid(..))
 import System.Directory (getAppUserDataDirectory, getCurrentDirectory)
-import System.Environment.Executable(splitExecutablePath)
-import System.FilePath ((</>), normalise, joinPath, splitPath)
+import System.Environment(getExecutablePath)
+import System.FilePath ((</>), normalise, joinPath, splitPath, takeDirectory)
 import qualified Data.List as List
 
 -- Module Environment ----------------------------------------------------------
@@ -57,8 +59,10 @@ resetModuleEnv env = env
 initialModuleEnv :: IO ModuleEnv
 initialModuleEnv  = do
   curDir <- getCurrentDirectory
+#ifndef RELOCATABLE
   dataDir <- getDataDir
-  (binDir, _) <- splitExecutablePath
+#endif
+  binDir <- takeDirectory `fmap` getExecutablePath
   let instDir = normalise . joinPath . init . splitPath $ binDir
   userDir <- getAppUserDataDirectory "cryptol"
   return ModuleEnv
@@ -77,11 +81,14 @@ initialModuleEnv  = do
                           -- ../share/cryptol on others
                         , instDir </> "share" </> "cryptol"
 #endif
+
+#ifndef RELOCATABLE
                           -- Cabal-defined data directory. Since this
                           -- is usually a global location like
                           -- /usr/local, search this one last in case
                           -- someone has multiple Cryptols
                         , dataDir
+#endif
                         ]
     , meDynEnv        = mempty
     , meMonoBinds     = True

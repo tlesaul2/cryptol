@@ -13,22 +13,24 @@ module Main where
 
 import Options
 
-import REPL.Command (loadCmd,loadPrelude)
-import REPL.Haskeline
-import REPL.Monad (REPL,setREPLTitle,io,DotCryptol(..),
-                   prependSearchPath,setSearchPath)
-import REPL.Logo
-import qualified REPL.Monad as REPL
+import Cryptol.REPL.Command (loadCmd,loadPrelude)
+import Cryptol.REPL.Monad (REPL,updateREPLTitle,setUpdateREPLTitle,
+                   io,prependSearchPath,setSearchPath)
+import qualified Cryptol.REPL.Monad as REPL
 
-import Cryptol.Utils.PP(pp)
+import REPL.Haskeline (Cryptolrc(..),repl,setREPLTitle)
+import REPL.Logo
+
+import Cryptol.Utils.PP(pp,vcat,hang,text)
 import GHC.IO.Encoding (setLocaleEncoding, utf8)
 import System.Environment (lookupEnv)
+import System.Exit (exitFailure)
 import System.FilePath (splitSearchPath,takeDirectory)
 
 data REPLOptions = REPLOptions
   { optLoad            :: [FilePath]
   , optBatch           :: Maybe FilePath
-  , optDotCryptol      :: DotCryptol
+  , optCryptolrc       :: Cryptolrc
   , optCryptolPathOnly :: Bool
   } deriving (Show)
 
@@ -38,18 +40,18 @@ argParser = ArgParser
   , defOptions  = defaultOptions REPLOptions
     { optLoad            = []
     , optBatch           = Nothing
-    , optDotCryptol      = DotCDefault
+    , optCryptolrc       = CryrcDefault
     , optCryptolPathOnly = False
     }
   , description = defaultDescription
     [ Option "b" ["batch"] (ReqArg setBatchScript "FILE")
       "run the script provided and exit"
 
-    , Option ""  ["ignore-dot-cryptol"] (NoArg setDotCDisabled)
-      "disable reading of .cryptol files"
+    , Option ""  ["ignore-cryptolrc"] (NoArg setCryrcDisabled)
+      "disable reading of .cryptolrc files"
 
-    , Option ""  ["cryptol-script"] (ReqArg addDotC "FILE")
-      "read additional .cryptol files"
+    , Option ""  ["cryptolrc-script"] (ReqArg addCryrc "FILE")
+      "read additional .cryptolrc files"
 
     , Option ""  ["cryptolpath-only"] (NoArg setCryptolPathOnly)
       "only look for .cry files in CRYPTOLPATH; don't use built-in locations"
@@ -66,18 +68,18 @@ addFile path = modifyOpt $ \ opts -> opts { optLoad = [ path ] }
 setBatchScript :: String -> OptParser (Options REPLOptions)
 setBatchScript path = modifyOpt $ \ opts -> opts { optBatch = Just path }
 
--- | Disable .cryptol files entirely
-setDotCDisabled :: OptParser (Options REPLOptions)
-setDotCDisabled  = modifyOpt $ \ opts -> opts { optDotCryptol = DotCDisabled }
+-- | Disable .cryptolrc files entirely
+setCryrcDisabled :: OptParser (Options REPLOptions)
+setCryrcDisabled  = modifyOpt $ \ opts -> opts { optCryptolrc = CryrcDisabled }
 
--- | Add another file to read as a .cryptol file, unless .cryptol
+-- | Add another file to read as a @.cryptolrc@ file, unless @.cryptolrc@
 -- files have been disabled
-addDotC :: String -> OptParser (Options REPLOptions)
-addDotC path = modifyOpt $ \ opts ->
-  case optDotCryptol opts of
-    DotCDefault  -> opts { optDotCryptol = DotCFiles [path] }
-    DotCDisabled -> opts
-    DotCFiles xs -> opts { optDotCryptol = DotCFiles (path:xs) }
+addCryrc :: String -> OptParser (Options REPLOptions)
+addCryrc path = modifyOpt $ \ opts ->
+  case optCryptolrc opts of
+    CryrcDefault  -> opts { optCryptolrc = CryrcFiles [path] }
+    CryrcDisabled -> opts
+    CryrcFiles xs -> opts { optCryptolrc = CryrcFiles (path:xs) }
 
 setCryptolPathOnly :: OptParser (Options REPLOptions)
 setCryptolPathOnly  = modifyOpt $ \opts -> opts { optCryptolPathOnly = True }
@@ -86,12 +88,20 @@ main :: IO ()
 main  = do
   setLocaleEncoding utf8
   opts <- getOpts argParser
-  repl (optDotCryptol opts) (optBatch opts) (setupREPL opts)
+  repl (optCryptolrc opts) (optBatch opts) (setupREPL opts)
 
 setupREPL :: REPLOptions -> REPL ()
 setupREPL opts = do
+  smoke <- REPL.smokeTest
+  case smoke of
+    [] -> return ()
+    _  -> io $ do
+      print (hang (text "Errors encountered on startup; exiting:")
+                4 (vcat (map pp smoke)))
+      exitFailure
   displayLogo True
-  setREPLTitle
+  setUpdateREPLTitle setREPLTitle
+  updateREPLTitle
   mCryptolPath <- io $ lookupEnv "CRYPTOLPATH"
   case mCryptolPath of
     Nothing -> return ()

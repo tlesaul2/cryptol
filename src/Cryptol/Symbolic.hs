@@ -50,6 +50,7 @@ proverConfigs =
   , ("z3"       , SBV.z3       )
   , ("boolector", SBV.boolector)
   , ("mathsat"  , SBV.mathSAT  )
+  , ("abc"      , SBV.abc      )
   , ("offline"  , SBV.defaultSMTCfg )
   , ("any"      , SBV.defaultSMTCfg )
   ]
